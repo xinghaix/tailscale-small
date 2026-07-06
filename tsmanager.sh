@@ -3,7 +3,7 @@
 # 兼容 POSIX sh / BusyBox sh。
 #
 # 目录策略：
-#   /data/tailscale/tailscale-manager.sh   持久脚本
+#   /data/tailscale/tsmanager.sh   持久脚本
 #   /data/tailscale/.env                   持久配置
 #   /data/tailscale/state/                 持久状态目录
 #   /tmp/tailscale/tailscale               大体积二进制
@@ -15,9 +15,9 @@
 #
 # 首次使用建议：
 #   mkdir -p /data/tailscale
-#   vi /data/tailscale/tailscale-manager.sh
-#   chmod +x /data/tailscale/tailscale-manager.sh
-#   /data/tailscale/tailscale-manager.sh install
+#   vi /data/tailscale/tsmanager.sh
+#   chmod +x /data/tailscale/tsmanager.sh
+#   /data/tailscale/tsmanager.sh install
 #
 
 set -eu
@@ -46,8 +46,8 @@ MIN_DATA_FREE_KB=${MIN_DATA_FREE_KB:-${MIN_FREE_KB:-64}}
 MIN_TMP_FREE_KB=${MIN_TMP_FREE_KB:-8192}
 TAILSCALED_ARGS=${TAILSCALED_ARGS:---tun=tailscale0}
 
-CRON_BEGIN='# BEGIN tailscale-manager.sh'
-CRON_END='# END tailscale-manager.sh'
+CRON_BEGIN='# BEGIN tsmanager.sh'
+CRON_END='# END tsmanager.sh'
 
 log() {
     printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -99,7 +99,7 @@ save_env() {
     make_base_dirs
     tmp="$ENV_FILE.$$"
     {
-        echo "# tailscale-manager.sh 自动生成的配置文件"
+        echo "# tsmanager.sh 自动生成的配置文件"
         printf 'DATA_DIR=%s\n' "$(quote_env "$DATA_DIR")"
         printf 'TMP_DIR=%s\n' "$(quote_env "$TMP_DIR")"
         printf 'STATEDIR=%s\n' "$(quote_env "$STATEDIR")"
@@ -348,7 +348,7 @@ cron_block() {
     cat <<EOF
 $CRON_BEGIN
 # 每 5 分钟检查一次，日志写到 /tmp，避免占用 /data。
-*/5 * * * * mkdir -p "$TMP_DIR" && DATA_DIR="$DATA_DIR" TMP_DIR="$TMP_DIR" "$DATA_DIR/tailscale-manager.sh" ensure >>"$TMP_DIR/manager.log" 2>&1
+*/5 * * * * mkdir -p "$TMP_DIR" && DATA_DIR="$DATA_DIR" TMP_DIR="$TMP_DIR" "$DATA_DIR/tsmanager.sh" ensure >>"$TMP_DIR/manager.log" 2>&1
 $CRON_END
 EOF
 }
@@ -495,7 +495,7 @@ usage() {
   help      显示此帮助
 
 目录策略：
-  /data/tailscale 只放小文件：tailscale-manager.sh、.env、state/
+  /data/tailscale 只放小文件：tsmanager.sh、.env、state/
   /tmp/tailscale 放二进制、下载包、解压目录、pid、日志
   socket 固定为：/var/run/tailscale/tailscaled.sock
 
