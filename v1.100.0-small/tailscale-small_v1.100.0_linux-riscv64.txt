@@ -1,0 +1,14 @@
+version=v1.100.0
+target=linux-riscv64
+goos=linux
+goarch=riscv64
+goarm=
+gomips=
+gomips64=
+size_before_upx=12189858
+size_after_upx=3598128
+upx_status=packed
+/tmp/tmp.oJ3PIZYNl7/pkg/tailscale: ELF 64-bit LSB executable, UCB RISC-V, double-float ABI, version 1 (SYSV), Go BuildID=4UGZHPk5SHuBiB08ZnXh/s3aWddqT2ylXyDtlZy8y/Q1TZo_G-jsKzyMXIiZA0/X134Eh1QnFOc7ED4Cdkl, statically linked, no section header
+tailscale
+tailscaled
+9eca222201da95129905aa3875dd99135266e399995ad982c015f5fc16b039cb  tailscale-small_v1.100.0_linux-riscv64.tar.gz

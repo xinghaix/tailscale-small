@@ -1,0 +1,14 @@
+version=v1.100.0
+target=linux-386
+goos=linux
+goarch=386
+goarm=
+gomips=
+gomips64=
+size_before_upx=12808354
+size_after_upx=3580864
+upx_status=packed
+/tmp/tmp.vqBevsoHjd/pkg/tailscale: ELF 32-bit LSB executable, Intel 80386, version 1 (GNU/Linux), Go BuildID=8NY70PyK5hdp2yip9R-D/QEh99Z9SBe1WxVX0taj5/i_DuGoTWRieIFlKSStNw/zuEI5-h9SL5wgspZIYJk, statically linked, no section header
+tailscale
+tailscaled
+efb6ff2c88277986eae9ead8e124988e0459865a550aa6caf0c2b112895766f0  tailscale-small_v1.100.0_linux-386.tar.gz

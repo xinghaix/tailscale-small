@@ -1,0 +1,14 @@
+version=v1.100.0
+target=linux-arm-v7
+goos=linux
+goarch=arm
+goarm=7
+gomips=
+gomips64=
+size_before_upx=12714146
+size_after_upx=3347692
+upx_status=packed
+/tmp/tmp.rgrkaeoWN6/pkg/tailscale: ELF 32-bit LSB executable, ARM, EABI5 version 1 (GNU/Linux), Go BuildID=Ut6Y3SKi0cj4tWWNXVvY/d07M9k1YNrK_ujRQWh6Y/tWbwnTy6Ly4nnM-ynKBC/tvvJPtTVXyv02401jGHE, statically linked, no section header
+tailscale
+tailscaled
+5c84015739735c548f9ebffd7ebb05db0104dc6ccd6d4cc25229b4b18de4cdda  tailscale-small_v1.100.0_linux-arm-v7.tar.gz

@@ -1,0 +1,14 @@
+version=v1.100.0
+target=linux-amd64
+goos=linux
+goarch=amd64
+goarm=
+gomips=
+gomips64=
+size_before_upx=13525154
+size_after_upx=4067468
+upx_status=packed
+/tmp/tmp.d0zTsV9ftr/pkg/tailscale: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), Go BuildID=RDD5fJoidN6tFHcTEhyA/o8DCbUR27x8jkS6g18lr/B67HR-HFLf7o4sOVIGnf/iwduR8zG8BNmEshVgeFv, statically linked, no section header
+tailscale
+tailscaled
+08c220ac47172207992e8887611c8ab67e2293e8f60f56c8ca56fb5427addfe7  tailscale-small_v1.100.0_linux-amd64.tar.gz

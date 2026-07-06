@@ -1,0 +1,14 @@
+version=v1.100.0
+target=linux-mips-softfloat
+goos=linux
+goarch=mips
+goarm=
+gomips=softfloat
+gomips64=
+size_before_upx=14614721
+size_after_upx=3282300
+upx_status=packed
+/tmp/tmp.hahDTp5bux/pkg/tailscale: ELF 32-bit MSB executable, MIPS, MIPS32 version 1 (SYSV), Go BuildID=23dBR0Q5GUwuHCMuTU2X/K7JBrkb2RlFbfHlgwPFT/ZrDiD9wtLAKsC81H5mEC/j2Uxei5vtzccjurpkMq0, statically linked, no section header
+tailscale
+tailscaled
+81e8bbba6902099eea973cccfe47d81b289979afdf9957e6bf60338a55679217  tailscale-small_v1.100.0_linux-mips-softfloat.tar.gz
