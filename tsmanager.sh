@@ -13,11 +13,14 @@
 #   /tmp/tailscale/manager.log             定时任务日志
 #   /var/run/tailscale/tailscaled.sock     本地控制 socket
 #
-# 首次使用建议：
-#   mkdir -p /data/tailscale
-#   vi /data/tailscale/tsmanager.sh
-#   chmod +x /data/tailscale/tsmanager.sh
-#   /data/tailscale/tsmanager.sh install
+# 交互模式（默认）：
+#   终端下运行 sh tsmanager.sh install，脚本会逐项询问，按回车取默认值。
+#   POSIX sh 不支持方向键/光标移动，输入错误时用 Backspace 删除后重新输入即可。
+#
+# 非交互模式（适用于脚本/自动化）：
+#   提前设置好环境变量，再加 -y 跳过所有提示：
+#     DATA_DIR=/data/tailscale TMP_DIR=/tmp/tailscale \
+#       VERSION=v1.100.0 sh tsmanager.sh install -y
 #
 # 默认下载：自动检测当前 Linux CPU 架构，从 jsDelivr CDN 下载匹配的
 # tailscale-small_<version>_<target>.tar.gz，并自动校验同名 .sha256 文件。
@@ -64,6 +67,8 @@ UPDATE_ON_ENSURE=${UPDATE_ON_ENSURE:-0}
 CRON_BEGIN='# BEGIN tsmanager.sh'
 CRON_END='# END tsmanager.sh'
 
+# ────────────────────────────── 工具函数 ──────────────────────────────
+
 log() {
     printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
 }
@@ -101,6 +106,8 @@ check_space() {
     fi
 }
 
+# ──────────────────────────── .env 持久化 ──────────────────────────────
+
 quote_env() {
     case "$1" in
         '') printf "''" ;;
@@ -135,6 +142,8 @@ save_env() {
     mv "$tmp" "$ENV_FILE"
     log "配置已写入 $ENV_FILE"
 }
+
+# ──────────────────────────── 架构检测 ─────────────────────────────────
 
 cpu_arch() {
     uname -m 2>/dev/null || printf unknown
@@ -189,6 +198,8 @@ detect_target() {
     esac
 }
 
+# ──────────────────────────── 版本/URL 解析 ────────────────────────────
+
 fetch_release_tags() {
     if have curl; then
         curl -fsSL --connect-timeout 5 --max-time 10 "$GITHUB_API" 2>/dev/null | \
@@ -237,11 +248,18 @@ effective_checksum_url() {
     printf '%s.sha256\n' "$(effective_package_url)"
 }
 
+# ──────────────────────── 交互式 / 非交互式配置 ─────────────────────────
+
 ask_value() {
     name=$1
     text=$2
     def=$3
-    printf '%s [%s]: ' "$text" "$def" >&2
+    hint=${4:-}
+
+    if [ -n "$hint" ]; then
+        printf '  %s\n' "$hint" >&2
+    fi
+    printf '  %s [%s]: ' "$text" "$def" >&2
     if read ans; then
         if [ -z "$ans" ]; then
             ans=$def
@@ -260,42 +278,98 @@ ask_value() {
 
 configure_interactive() {
     make_base_dirs
-    echo "首次配置 Tailscale，直接回车使用默认值。" >&2
+    # 用 cpu_arch 展示架构（永不失败），避免非 Linux 上 detect_target 退出
+    displayed_arch=$(cpu_arch)
     default_package=${PACKAGE_URL:-}
     if [ -z "$default_package" ]; then
         default_target=$(detect_target)
         default_package=$CDN_BASE/latest/tailscale-small_latest_${default_target}.tar.gz
     fi
-    ask_value STATEDIR "状态目录 statedir（小文件，建议放 /data）" "$STATEDIR"
-    ask_value CONFIG "配置文件 config（可留空；非空时会传给 tailscaled --config）" "$CONFIG"
-    echo "下载地址及 checksum 说明：" >&2
-    echo "  留空 = 自动检测 Linux CPU 架构，从 jsDelivr CDN 下载" >&2
-    echo "  填入地址 = 绑定自定义源（checksum 自动从地址 + .sha256 推导）" >&2
-    echo "  示例：$default_package" >&2
-    ask_value PACKAGE_URL "下载地址" "$default_package"
-    echo "版本选择：" >&2
-    echo "  latest = 永远跟随最新发布版（默认，推荐）" >&2
-    echo "  固定版本号 = 例如 v1.100.0；如果指定版本不存在，自动回退到 latest" >&2
-    ask_value VERSION "Tailscale 版本" "$VERSION"
+
+    cat >&2 <<INTRO
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Tailscale 极简版 (tailscale-small) 路由器安装向导
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  检测到 CPU 架构：$displayed_arch
+
+  说明：
+  · 每项都会显示 [默认值]，直接按回车即可使用默认。
+  · POSIX sh 不支持方向键/光标移动 — 输入错误请用
+    Backspace 删掉后重新输入。
+INTRO
+
+    ask_value STATEDIR \
+        "状态目录（持久保存 Tailscale 身份和密钥）" \
+        "$STATEDIR"
+
+    ask_value CONFIG \
+        "Tailscale 配置文件路径（可留空）" \
+        "$CONFIG" \
+        "  非空时会传给 tailscaled --config，一般不需要。"
+
+    cat >&2 <<'PKGINTRO'
+
+  ── 下载设置 ──
+  支持两种方式：
+    1. 留空 = 自动从 jsDelivr CDN 下载，架构已检测为上面的值
+    2. 填入完整 URL = 使用自定义下载源（checksum 自动从 URL + .sha256 推导）
+PKGINTRO
+
+    ask_value PACKAGE_URL \
+        "下载地址" \
+        "$default_package" \
+        "  默认：$default_package"
+
+    cat >&2 <<'VERINTRO'
+
+  ── 版本选择 ──
+    latest    始终跟随最新发布（默认，推荐）
+    固定版本  例如 v1.100.0 — 如果该版本不存在，自动回退到 latest
+VERINTRO
+
+    ask_value VERSION \
+        "Tailscale 版本" \
+        "$VERSION"
+
+    # 确认摘要
+    echo >&2
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+    echo "  配置摘要：" >&2
+    echo "  · 状态目录：$STATEDIR" >&2
+    echo "  · 配置文件：${CONFIG:-(空)}" >&2
+    echo "  · 下载地址：$PACKAGE_URL" >&2
+    echo "  · 版　　本：$VERSION" >&2
+    echo "  · 二进制安装到：$TMP_DIR/tailscale" >&2
+    echo "  · socket：$SOCKET" >&2
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+    printf '  确认以上配置？[Y/n] ' >&2
+    if read confirm && [ -n "$confirm" ]; then
+        case "$confirm" in
+            y|Y|yes|YES|Yes) ;;
+            *) echo "  已取消安装" >&2; exit 0 ;;
+        esac
+    fi
+
     save_env
 }
 
-ensure_config() {
-    mode=${1:-auto}
-    if [ -f "$ENV_FILE" ]; then
-        return 0
+configure_batch() {
+    # 非交互模式：从环境变量取值，不询问
+    log "非交互模式：从环境变量读取配置"
+    STATEDIR=${STATEDIR:-/data/tailscale/state}
+    CONFIG=${CONFIG:-}
+    VERSION=${VERSION:-latest}
+    if [ -z "$PACKAGE_URL" ]; then
+        target=$(detect_target)
+        PACKAGE_URL=$CDN_BASE/$VERSION/tailscale-small_${VERSION}_${target}.tar.gz
     fi
-    if [ "${AUTO_CONFIG:-}" = "1" ]; then
-        save_env
-        return 0
-    fi
-    if [ "$mode" = interactive ] && [ -t 0 ]; then
-        configure_interactive
-        return 0
-    fi
-    log "未找到 $ENV_FILE，使用默认配置生成；如需自定义下载源，请先交互运行：$0 install"
+    make_base_dirs
     save_env
 }
+
+# ──────────────────────────── 下载 & 校验 ──────────────────────────────
 
 download_file() {
     url=$1
@@ -400,6 +474,8 @@ install_package() {
     rm -rf "$pkg" "$sumfile" "$unpack"
 }
 
+# ──────────────────────────── 进程管理 ─────────────────────────────────
+
 files_ok() {
     [ -x "$BIN" ] && [ ! -L "$BIN" ] && [ -L "$DAEMON" ] && [ -x "$DAEMON" ]
 }
@@ -488,6 +564,8 @@ stop_tailscaled() {
     rm -f "$PIDFILE"
     log "tailscaled 已强制结束"
 }
+
+# ──────────────────────────── cron 管理 ────────────────────────────────
 
 cron_target() {
     if [ -n "${CRON_FILE:-}" ]; then
@@ -626,6 +704,8 @@ cron_is_written() {
     fi
 }
 
+# ──────────────────────────── 状态 / 命令入口 ──────────────────────────
+
 status() {
     make_base_dirs
     printf '持久目录 DATA_DIR=%s\n' "$DATA_DIR"
@@ -676,6 +756,25 @@ status() {
     return 0
 }
 
+ensure_config() {
+    mode=${1:-auto}
+    if [ -f "$ENV_FILE" ]; then
+        return 0
+    fi
+    if [ "$mode" = interactive ] && [ -t 0 ]; then
+        configure_interactive
+        return 0
+    fi
+    if [ "$mode" = batch ]; then
+        configure_batch
+        return 0
+    fi
+    # stdin 非终端时也走默认配置，避免 pipe 场景下卡在交互分支
+    log "未找到配置文件，使用默认配置生成；如需自定义，请先运行：$0 install"
+    save_env
+    return 0
+}
+
 ensure_all() {
     ensure_config auto
     make_base_dirs
@@ -698,6 +797,14 @@ install_all() {
     install_package
     write_cron
 }
+
+install_batch() {
+    ensure_config batch
+    install_package
+    write_cron
+}
+
+# ──────────────────────────── 卸载 ─────────────────────────────────────
 
 yes_value() {
     case "$1" in
@@ -771,63 +878,93 @@ uninstall_all() {
     log "卸载完成"
 }
 
+# ──────────────────────────── 帮助 / 入口 ──────────────────────────────
+
 usage() {
-    cat <<EOF
-用法：$0 命令
+    cat <<'EOF'
+用法：tsmanager.sh 命令 [选项]
 
 命令：
-  install    首次配置 + 下载校验 + 安装二进制 + 自动写入 cron，重复执行幂等
-  update     重新下载/校验/安装并刷新 cron，然后启动 tailscaled
-  start      启动 tailscaled；如果二进制缺失会先下载校验并安装
-  stop       停止 tailscaled；未运行也返回成功
-  restart    重启 tailscaled
-  uninstall  完整卸载：停止进程、移除 cron、删除运行时文件；交互选择是否删除配置和脚本
-  status     查看配置、文件、进程、空间、cron 和下载 URL
-  ensure     cron 使用：从 .env/默认配置读取，必要时安装并启动，幂等
-  cron       自动把定时任务写入系统 crontab，重复执行幂等
-  help       显示此帮助
+  install     交互式配置 + 下载校验 + 安装 + 写入 cron。重复执行幂等。
+  install -y  非交互安装：从环境变量读取所有配置，直接安装。
+  update      重新下载/校验/安装并刷新 cron，然后启动 tailscaled。
+  start       启动 tailscaled；如果二进制缺失会先下载校验并安装。
+  stop        停止 tailscaled；未运行也返回成功。
+  restart     重启 tailscaled。
+  uninstall   完整卸载：停止进程、移除 cron、删除运行时文件；
+              交互选择是否删除配置和脚本。
+  status      查看配置、文件、进程、空间、cron 和下载 URL。
+  ensure      cron 使用：从 .env 读取配置，必要时安装并启动，幂等。
+  cron        自动把定时任务写入系统 crontab，重复执行幂等。
+  help        显示此帮助。
+
+两种安装模式：
+
+  交互式（终端下默认）：
+    sh tsmanager.sh install
+    -> 逐项提示，每项显示 [默认值]，回车接受。最后显示摘要并确认。
+
+  非交互式（脚本/自动化）：
+    DATA_DIR=/data/tailscale TMP_DIR=/tmp/tailscale \
+      VERSION=v1.100.0 sh tsmanager.sh install -y
+    -> 所有配置从环境变量读取，不询问，不等待确认。
+
+环境变量（install -y 模式下这些变量控制全部行为）：
+  DATA_DIR=/data/tailscale      持久文件目录
+  TMP_DIR=/tmp/tailscale        运行时文件目录
+  STATEDIR=/data/tailscale/state 状态目录
+  CONFIG=                       配置文件（可留空）
+  PACKAGE_URL=                  下载地址（留空则自动从 CDN 取最新版）
+  VERSION=latest                版本号（latest 或 v1.100.0）
+  MIN_DATA_FREE_KB=64           最小磁盘空间限制
+  MIN_TMP_FREE_KB=8192
+  TAILSCALED_ARGS='--tun=tailscale0'  tailscaled 额外参数
+  UPDATE_ON_ENSURE=0            设为 1 时 cron 每次重新下载校验
 
 下载方式：
   留空 = 自动检测本机 Linux CPU 架构，从 jsDelivr CDN 下载：
-    tailscale-small_<版本>_<target>.tar.gz + .sha256
+    tailscale-small_<版本>_<目标>.tar.gz + .sha256
   版本默认 latest（跟随最新发布）。可设固定版本（如 v1.100.0）：
-    如果指定版本存在 → 用该版本
-    如果拉不到线上列表 → 按给定版本继续
-    如果指定版本不存在 → 自动回退到 latest
-  自定义 = 设置一个下载地址即可。checksum 文件只需放在同路径的 <地址>.sha256：
-    PACKAGE_URL=https://example.com/tailscale-small_xxx.tar.gz
-
-.env 配置项（只保存用户显式配置，自动推导项不写入）：
-  DATA_DIR=/data/tailscale
-  TMP_DIR=/tmp/tailscale
-  STATEDIR=/data/tailscale/state
-  CONFIG=                 # 可留空；非空时传给 tailscaled --config
-  PACKAGE_URL=            # 可留空使用 CDN 默认值
-  VERSION=latest          # latest 或固定版本（如 v1.100.0）
-  MIN_DATA_FREE_KB=64
-  MIN_TMP_FREE_KB=8192
-  TAILSCALED_ARGS='--tun=tailscale0'
-  UPDATE_ON_ENSURE=0      # 设为 1 时 cron 每次都会重新下载校验
+    如果指定版本存在 -> 用该版本
+    如果拉不到线上列表 -> 按给定版本继续
+    如果指定版本不存在 -> 自动回退到 latest
+  自定义 = 设置一个下载地址即可，checksum 自动从地址 + .sha256 推导：
+    PACKAGE_URL=https://example.com/tailscale-small_v1.100.0_linux-arm64.tar.gz
 
 目录策略：
-  /data/tailscale 只放小文件：tsmanager.sh、.env、state/
-  /tmp/tailscale 放二进制、下载包、解压目录、pid、日志
-  socket 固定为：/var/run/tailscale/tailscaled.sock
-
-压缩包格式：
-  tailscale
-  tailscaled -> tailscale
+  /data/tailscale -> 小文件：tsmanager.sh、.env、state/
+  /tmp/tailscale  -> 二进制、下载包、解压目录、pid、日志
+  socket -> /var/run/tailscale/tailscaled.sock
 
 首次认证示例：
-  /tmp/tailscale/tailscale --socket=/var/run/tailscale/tailscaled.sock up --auth-key=tskey-... --hostname=router
-  /tmp/tailscale/tailscale --socket=/var/run/tailscale/tailscaled.sock up
+  /tmp/tailscale/tailscale --socket=/var/run/tailscale/tailscaled.sock up \
+    --auth-key=tskey-... --hostname=router
 EOF
 }
 
+# 解析命令行
 cmd=${1:-status}
+shift_args=false
+case "$cmd" in
+    -y|--yes)
+        cmd=${2:-install}
+        shift_args=true
+        ;;
+esac
+
+if $shift_args; then
+    subcmd_args="$*"
+else
+    subcmd_args="${2:-}"
+fi
+
 case "$cmd" in
     install)
-        install_all
+        if [ "$subcmd_args" = "-y" ] || [ "$subcmd_args" = "--yes" ]; then
+            install_batch
+        else
+            install_all
+        fi
         ;;
     update)
         ensure_config auto
