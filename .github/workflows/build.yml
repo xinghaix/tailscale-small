@@ -111,7 +111,7 @@ jobs:
           set -euo pipefail
           mkdir -p release-files
           cp artifacts/* release-files/
-          cp scripts/tailscale-manager.sh release-files/tailscale-manager.sh
+          cp tailscale-manager.sh release-files/tailscale-manager.sh
           (cd release-files && sha256sum * > SHA256SUMS)
           ls -lh release-files
       - name: Create or update release
@@ -128,3 +128,49 @@ jobs:
           else
             gh release create "$RELEASE_TAG" release-files/* --title "$title" --notes "$notes"
           fi
+      - name: Publish jsDelivr CDN branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+          TAILSCALE_REF: ${{ needs.resolve.outputs.tailscale_ref }}
+        run: |
+          set -euo pipefail
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          cd "$RUNNER_TEMP"
+          rm -rf tailscale-small-cdn
+          if git clone --depth 1 --branch cdn "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" tailscale-small-cdn 2>/dev/null; then
+            cd tailscale-small-cdn
+          else
+            mkdir tailscale-small-cdn
+            cd tailscale-small-cdn
+            git init
+            git checkout -b cdn
+          fi
+
+          mkdir -p "$RELEASE_TAG" latest
+          cp "$GITHUB_WORKSPACE"/release-files/* "$RELEASE_TAG"/
+          cp "$GITHUB_WORKSPACE"/release-files/tailscale-manager.sh latest/tailscale-manager.sh
+
+          rm -f latest/tailscale-small_latest_*.tar.gz latest/tailscale-small_latest_*.tar.gz.sha256 latest/tailscale-small_latest_*.txt latest/SHA256SUMS
+          for f in "$GITHUB_WORKSPACE"/release-files/tailscale-small_${TAILSCALE_REF}_*.tar.gz; do
+            base=$(basename "$f")
+            latest_base=${base/$TAILSCALE_REF/latest}
+            cp "$f" "latest/$latest_base"
+            (cd latest && sha256sum "$latest_base" > "$latest_base.sha256")
+          done
+          for f in "$GITHUB_WORKSPACE"/release-files/tailscale-small_${TAILSCALE_REF}_*.txt; do
+            base=$(basename "$f")
+            latest_base=${base/$TAILSCALE_REF/latest}
+            cp "$f" "latest/$latest_base"
+          done
+          (cd latest && sha256sum * > SHA256SUMS)
+
+          git add .
+          if git diff --cached --quiet; then
+            echo "CDN branch already up to date"
+            exit 0
+          fi
+          git commit -m "Publish ${RELEASE_TAG} CDN files"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:cdn
