@@ -540,6 +540,57 @@ write_cron() {
     log "定时任务已写入"
 }
 
+
+remove_cron() {
+    target=$(cron_target 2>/dev/null || true)
+    if [ -z "$target" ]; then
+        log "未找到定时任务位置，跳过 cron 清理"
+        return 0
+    fi
+
+    old="$TMP_DIR/cron.old.$$"
+    new="$TMP_DIR/cron.new.$$"
+    mkdir -p "$TMP_DIR"
+
+    if [ "$target" = crontab ]; then
+        crontab -l 2>/dev/null >"$old" || :
+    else
+        if [ -f "$target" ]; then
+            cat "$target" >"$old"
+        else
+            log "定时任务不存在，跳过 cron 清理"
+            rm -f "$old" "$new"
+            return 0
+        fi
+    fi
+
+    awk -v begin="$CRON_BEGIN" -v end="$CRON_END" -v old_begin="$OLD_CRON_BEGIN" -v old_end="$OLD_CRON_END" '
+        $0 == begin || $0 == old_begin {skip = 1; next}
+        $0 == end || $0 == old_end {skip = 0; next}
+        skip {next}
+        {print}
+    ' "$old" >"$new"
+
+    if cmp -s "$old" "$new" >/dev/null 2>&1; then
+        rm -f "$old" "$new"
+        log "定时任务未安装或已清理"
+        return 0
+    fi
+
+    if [ "$target" = crontab ]; then
+        if [ -s "$new" ]; then
+            crontab "$new"
+        else
+            crontab -r 2>/dev/null || crontab "$new"
+        fi
+        rm -f "$new"
+    else
+        mv "$new" "$target"
+    fi
+    rm -f "$old"
+    log "定时任务已移除"
+}
+
 cron_is_written() {
     target=$(cron_target 2>/dev/null || true)
     if [ -z "$target" ]; then
@@ -625,19 +676,90 @@ install_all() {
     write_cron
 }
 
+
+yes_value() {
+    case "$1" in
+        1|y|Y|yes|YES|Yes|true|TRUE|True|on|ON) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+ask_yes_no_default_no() {
+    text=$1
+    if [ -t 0 ]; then
+        printf '%s [y/N]: ' "$text" >&2
+        if read ans; then
+            yes_value "$ans"
+            return $?
+        fi
+    fi
+    return 1
+}
+
+remove_runtime_files() {
+    rm -f "$BIN" "$DAEMON" "$PIDFILE" "$LOGFILE" "$SOCKET" \
+        "$TMP_DIR/tailscale.old" "$TMP_DIR/tailscale.combined" "$TMP_DIR/tailscale.combined.old" \
+        "$TMP_DIR/manager.log"
+    rm -f "$TMP_DIR"/tailscale-package.*.tar.gz "$TMP_DIR"/tailscale-package.*.tar.gz.sha256 2>/dev/null || true
+    rm -rf "$TMP_DIR"/unpack.* 2>/dev/null || true
+    rmdir "$RUN_DIR" 2>/dev/null || true
+    rmdir "$TMP_DIR" 2>/dev/null || true
+    log "运行时文件已清理"
+}
+
+remove_config_files() {
+    rm -f "$ENV_FILE"
+    case "$STATEDIR" in
+        ''|/) fail "拒绝删除危险状态目录：$STATEDIR" ;;
+        *) rm -rf "$STATEDIR" ;;
+    esac
+    rmdir "$DATA_DIR" 2>/dev/null || true
+    log "配置和状态目录已清理"
+}
+
+remove_script_file() {
+    script_path=$0
+    case "$script_path" in
+        */*) ;;
+        *) script_path="$DATA_DIR/$SCRIPT_NAME" ;;
+    esac
+    rm -f "$script_path" "$DATA_DIR/$SCRIPT_NAME"
+    rmdir "$DATA_DIR" 2>/dev/null || true
+    log "脚本文件已清理"
+}
+
+uninstall_all() {
+    log "开始卸载 tailscale-small"
+    stop_tailscaled
+    remove_cron
+    remove_runtime_files
+
+    if yes_value "${DELETE_CONFIG:-0}" || ask_yes_no_default_no "是否删除配置文件 .env 和状态目录 ${STATEDIR}？默认保留"; then
+        remove_config_files
+    else
+        log "保留配置文件和状态目录"
+    fi
+
+    if yes_value "${DELETE_SCRIPT:-0}" || ask_yes_no_default_no "是否删除脚本 ${DATA_DIR}/${SCRIPT_NAME}？默认保留"; then
+        remove_script_file
+    else
+        log "保留脚本文件"
+    fi
+
+    log "卸载完成"
+}
+
 usage() {
     cat <<EOF
 用法：$0 命令
 
 命令：
   install    首次配置 + 下载校验 + 安装二进制 + 自动写入 cron，重复执行幂等
-  init       兼容旧命令，等同于 install
-  config     兼容旧命令，等同于 install
-  configure  兼容旧命令，等同于 install
   update     重新下载/校验/安装并刷新 cron，然后启动 tailscaled
   start      启动 tailscaled；如果二进制缺失会先下载校验并安装
   stop       停止 tailscaled；未运行也返回成功
   restart    重启 tailscaled
+  uninstall  完整卸载：停止进程、移除 cron、删除运行时文件；交互选择是否删除配置和脚本
   status     查看配置、文件、进程、空间、cron 和下载 URL
   ensure     cron 使用：从 .env/默认配置读取，必要时安装并启动，幂等
   cron       自动把定时任务写入系统 crontab，重复执行幂等
@@ -688,9 +810,6 @@ case "$cmd" in
     install)
         install_all
         ;;
-    init|config|configure)
-        install_all
-        ;;
     update)
         ensure_config auto
         stop_tailscaled
@@ -707,6 +826,9 @@ case "$cmd" in
     restart)
         stop_tailscaled
         start_tailscaled
+        ;;
+    uninstall)
+        uninstall_all
         ;;
     status)
         status

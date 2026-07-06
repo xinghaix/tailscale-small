@@ -180,17 +180,38 @@ All commands are designed to be idempotent and safe to run repeatedly.
 
 ```text
 install    first-run config + download + checksum verification + binary install + automatic cron setup
-init       compatibility alias for install
-config     compatibility alias for install
-configure  compatibility alias for install
 update     download/verify/install again, refresh cron, then start tailscaled
 start      start tailscaled; download/verify/install first if runtime files are missing
 stop       stop tailscaled; succeeds even if it is not running
 restart    restart tailscaled
+uninstall  full uninstall: stop process, remove cron, delete runtime files; interactively choose whether to delete config and script
 status     show config, files, process, storage, cron, and download URLs
 ensure     cron action: read .env/defaults, install if needed, start if needed; idempotent
 cron       automatically write or update the cron job without duplicating it
 help       show help
+```
+
+## Uninstall
+
+Run:
+
+```sh
+/data/tailscale/tsmanager.sh uninstall
+```
+
+Uninstall performs structured cleanup:
+
+- Stops `tailscaled`
+- Removes the cron block written by `tsmanager.sh` and also cleans the old `tailscale-manager.sh` block if present
+- Deletes runtime files under `/tmp/tailscale`, including binaries, pid/log files, temporary downloads, and unpack directories
+- Keeps `/data/tailscale/.env`, the state directory, and the script itself by default
+- Interactively asks whether to delete config/state
+- Interactively asks whether to delete the script itself
+
+For non-interactive environments, force optional deletion with environment variables:
+
+```sh
+DELETE_CONFIG=1 DELETE_SCRIPT=1 /data/tailscale/tsmanager.sh uninstall
 ```
 
 ## Manager storage layout

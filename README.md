@@ -180,17 +180,38 @@ TS_CHECKSUM_URL='https://example.com/tailscale-small_v1.88.0_linux-arm64.tar.gz.
 
 ```text
 install    首次配置 + 下载校验 + 安装二进制 + 自动写入 cron，重复执行幂等
-init       兼容旧命令，等同于 install
-config     兼容旧命令，等同于 install
-configure  兼容旧命令，等同于 install
 update     重新下载/校验/安装并刷新 cron，然后启动 tailscaled
 start      启动 tailscaled；如果二进制缺失会先下载校验并安装
 stop       停止 tailscaled；未运行也返回成功
 restart    重启 tailscaled
+uninstall  完整卸载：停止进程、移除 cron、删除运行时文件；交互选择是否删除配置和脚本
 status     查看配置、文件、进程、空间、cron 和下载 URL
 ensure     cron 使用：从 .env/默认配置读取，必要时安装并启动，幂等
 cron       自动写入或更新定时任务，重复执行不会重复追加
 help       显示帮助
+```
+
+## 卸载
+
+执行：
+
+```sh
+/data/tailscale/tsmanager.sh uninstall
+```
+
+卸载会执行工程化清理：
+
+- 停止 `tailscaled`
+- 移除 `tsmanager.sh` 写入的 cron block（兼容清理旧的 `tailscale-manager.sh` block）
+- 删除 `/tmp/tailscale` 里的运行时文件、二进制、pid、日志、临时下载包和解压目录
+- 默认保留 `/data/tailscale/.env`、状态目录和脚本本身
+- 交互询问是否删除配置/状态目录
+- 交互询问是否删除脚本本身
+
+非交互环境可以用环境变量强制删除可选项：
+
+```sh
+DELETE_CONFIG=1 DELETE_SCRIPT=1 /data/tailscale/tsmanager.sh uninstall
 ```
 
 ## 管理脚本目录策略
