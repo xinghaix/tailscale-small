@@ -17,6 +17,7 @@ This project does not fork the Tailscale source code. GitHub Actions periodicall
 - Each archive contains only `tailscale` and `tailscaled`
 - Includes a BusyBox/POSIX sh compatible `tsmanager.sh`
 - `tsmanager.sh` automatically detects the current Linux CPU architecture by default and downloads the matching archive plus `.sha256` checksum file from jsDelivr CDN
+- Supports version selection: `latest` (default) or pin to a specific version (e.g. `v1.100.0`); falls back to latest if the specified version is unavailable
 - The archive must pass SHA256 integrity verification before extraction and installation
 - Supports downloads from GitHub Releases and jsDelivr CDN
 
@@ -129,11 +130,12 @@ If the device cannot access jsDelivr, use GitHub Releases or a LAN HTTP URL inst
 - Downloads the archive, verifies `.sha256`, then installs the binary into `/tmp/tailscale`
 - Automatically installs the cron self-healing task
 
-The script asks just 3 questions:
+The script asks just 4 questions:
 
 - `statedir`, default `/data/tailscale/state`
 - `config`, optional and can be empty
 - download URL; leave empty to auto-detect the current Linux CPU architecture and use jsDelivr CDN
+- version; default `latest` (follow the latest release), or pin to e.g. `v1.100.0`
 
 The default download URLs are generated from the detected target, for example arm64:
 

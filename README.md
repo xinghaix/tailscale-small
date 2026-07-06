@@ -17,6 +17,7 @@
 - 每个压缩包只包含：`tailscale` 和 `tailscaled`
 - 提供 BusyBox/POSIX sh 兼容的 `tsmanager.sh`
 - `tsmanager.sh` 默认自动检测当前 Linux CPU 架构，从 jsDelivr CDN 下载匹配的压缩包和 `.sha256` 校验文件
+- 支持选择版本：`latest`（默认）或固定版本（如 `v1.100.0`），版本不存在时自动回退至 latest
 - 下载后必须通过 SHA256 完整性校验才会解压安装
 - 支持 GitHub Releases 和 jsDelivr CDN 下载
 
@@ -129,11 +130,12 @@ chmod +x tsmanager.sh
 - 下载压缩包，校验 `.sha256`，通过后安装二进制到 `/tmp/tailscale`
 - 自动写入 cron 定时自愈任务
 
-脚本只问 3 个问题：
+脚本只问 4 个问题：
 
 - 状态目录 `statedir`，默认 `/data/tailscale/state`
 - 配置文件 `config`，可留空
 - 下载地址，留空则自动检测本机 Linux CPU 架构从 jsDelivr CDN 下载
+- 版本号 `VERSION`，默认 `latest`（跟随最新发布），也可固定为 `v1.100.0` 等
 
 默认下载地址会自动按架构生成，例如 arm64：
 

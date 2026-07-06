@@ -20,12 +20,13 @@
 #   /data/tailscale/tsmanager.sh install
 #
 # 默认下载：自动检测当前 Linux CPU 架构，从 jsDelivr CDN 下载匹配的
-# tailscale-small_latest_<target>.tar.gz，并自动校验同名 .sha256 文件。
-# 也支持自定义下载地址（checksum 自动从地址 + .sha256 推导）。
+# tailscale-small_<version>_<target>.tar.gz，并自动校验同名 .sha256 文件。
+# 支持固定版本（如 v1.100.0），默认使用 latest。
 
 set -eu
 
-CDN_LATEST=https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest
+CDN_BASE=https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn
+GITHUB_API=https://api.github.com/repos/xinghaix/tailscale-small/releases
 
 SCRIPT_NAME=tsmanager.sh
 DATA_DIR=${DATA_DIR:-/data/tailscale}
@@ -54,6 +55,7 @@ PIDFILE=${PIDFILE:-$TMP_DIR/tailscaled.pid}
 LOGFILE=${LOGFILE:-$TMP_DIR/tailscaled.log}
 TARGET=${TARGET:-}
 PACKAGE_URL=${PACKAGE_URL:-}
+VERSION=${VERSION:-latest}
 MIN_DATA_FREE_KB=${MIN_DATA_FREE_KB:-64}
 MIN_TMP_FREE_KB=${MIN_TMP_FREE_KB:-8192}
 TAILSCALED_ARGS=${TAILSCALED_ARGS:---tun=tailscale0}
@@ -116,6 +118,7 @@ save_env() {
         printf 'STATEDIR=%s\n' "$(quote_env "$STATEDIR")"
         printf 'CONFIG=%s\n' "$(quote_env "$CONFIG")"
         printf 'PACKAGE_URL=%s\n' "$(quote_env "$PACKAGE_URL")"
+        printf 'VERSION=%s\n' "$(quote_env "$VERSION")"
         printf 'MIN_DATA_FREE_KB=%s\n' "$(quote_env "$MIN_DATA_FREE_KB")"
         printf 'MIN_TMP_FREE_KB=%s\n' "$(quote_env "$MIN_TMP_FREE_KB")"
         printf 'TAILSCALED_ARGS=%s\n' "$(quote_env "$TAILSCALED_ARGS")"
@@ -186,13 +189,48 @@ detect_target() {
     esac
 }
 
+fetch_release_tags() {
+    if have curl; then
+        curl -fsSL --connect-timeout 5 --max-time 10 "$GITHUB_API" 2>/dev/null | \
+            sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p'
+    elif have wget; then
+        wget -qO- --timeout=10 "$GITHUB_API" 2>/dev/null | \
+            sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p'
+    else
+        return 1
+    fi
+}
+
+resolve_version() {
+    if [ "$VERSION" = latest ]; then
+        printf '%s\n' latest
+        return 0
+    fi
+
+    tags=$(fetch_release_tags 2>/dev/null || true)
+    if [ -z "$tags" ]; then
+        log "无法获取线上版本列表，按本地配置版本 $VERSION 继续"
+        printf '%s\n' "$VERSION"
+        return 0
+    fi
+
+    if printf '%s\n' "$tags" | grep -Fxq "$VERSION"; then
+        printf '%s\n' "$VERSION"
+        return 0
+    fi
+
+    log "指定版本 $VERSION 不存在线上列表，回退到 latest"
+    printf '%s\n' latest
+}
+
 effective_package_url() {
     if [ -n "$PACKAGE_URL" ]; then
         printf '%s\n' "$PACKAGE_URL"
         return 0
     fi
     target=$(detect_target)
-    printf '%s/tailscale-small_latest_%s.tar.gz\n' "$CDN_LATEST" "$target"
+    version=$(resolve_version)
+    printf '%s/%s/tailscale-small_%s_%s.tar.gz\n' "$CDN_BASE" "$version" "$version" "$target"
 }
 
 effective_checksum_url() {
@@ -215,6 +253,7 @@ ask_value() {
         STATEDIR) STATEDIR=$ans ;;
         CONFIG) CONFIG=$ans ;;
         PACKAGE_URL) PACKAGE_URL=$ans ;;
+        VERSION) VERSION=$ans ;;
         *) fail "内部错误：不支持的配置项 $name" ;;
     esac
 }
@@ -225,7 +264,7 @@ configure_interactive() {
     default_package=${PACKAGE_URL:-}
     if [ -z "$default_package" ]; then
         default_target=$(detect_target)
-        default_package=$CDN_LATEST/tailscale-small_latest_${default_target}.tar.gz
+        default_package=$CDN_BASE/latest/tailscale-small_latest_${default_target}.tar.gz
     fi
     ask_value STATEDIR "状态目录 statedir（小文件，建议放 /data）" "$STATEDIR"
     ask_value CONFIG "配置文件 config（可留空；非空时会传给 tailscaled --config）" "$CONFIG"
@@ -234,6 +273,10 @@ configure_interactive() {
     echo "  填入地址 = 绑定自定义源（checksum 自动从地址 + .sha256 推导）" >&2
     echo "  示例：$default_package" >&2
     ask_value PACKAGE_URL "下载地址" "$default_package"
+    echo "版本选择：" >&2
+    echo "  latest = 永远跟随最新发布版（默认，推荐）" >&2
+    echo "  固定版本号 = 例如 v1.100.0；如果指定版本不存在，自动回退到 latest" >&2
+    ask_value VERSION "Tailscale 版本" "$VERSION"
     save_env
 }
 
@@ -593,6 +636,7 @@ status() {
     printf '状态目录 STATEDIR=%s\n' "$STATEDIR"
     printf '配置文件 CONFIG=%s\n' "$CONFIG"
     printf 'socket=%s\n' "$SOCKET"
+    printf '配置版本 VERSION=%s\n' "$VERSION"
     if target=$(detect_target 2>/dev/null); then
         printf '目标架构=%s\n' "$target"
     else
@@ -744,11 +788,12 @@ usage() {
   help       显示此帮助
 
 下载方式：
-  留空 = 自动检测本机 Linux CPU 架构，从 jsDelivr CDN 下载两个文件：
-    1) tailscale-small_latest_<target>.tar.gz
-    2) tailscale-small_latest_<target>.tar.gz.sha256
-  下载后必须通过 SHA256 校验才会解压安装。
-
+  留空 = 自动检测本机 Linux CPU 架构，从 jsDelivr CDN 下载：
+    tailscale-small_<版本>_<target>.tar.gz + .sha256
+  版本默认 latest（跟随最新发布）。可设固定版本（如 v1.100.0）：
+    如果指定版本存在 → 用该版本
+    如果拉不到线上列表 → 按给定版本继续
+    如果指定版本不存在 → 自动回退到 latest
   自定义 = 设置一个下载地址即可。checksum 文件只需放在同路径的 <地址>.sha256：
     PACKAGE_URL=https://example.com/tailscale-small_xxx.tar.gz
 
@@ -758,6 +803,7 @@ usage() {
   STATEDIR=/data/tailscale/state
   CONFIG=                 # 可留空；非空时传给 tailscaled --config
   PACKAGE_URL=            # 可留空使用 CDN 默认值
+  VERSION=latest          # latest 或固定版本（如 v1.100.0）
   MIN_DATA_FREE_KB=64
   MIN_TMP_FREE_KB=8192
   TAILSCALED_ARGS='--tun=tailscale0'
