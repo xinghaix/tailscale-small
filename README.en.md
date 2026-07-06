@@ -15,7 +15,7 @@ This project does not fork the Tailscale source code. GitHub Actions periodicall
 - Daemon entry symlink: `tailscaled -> tailscale`
 - Tries UPX compression; architectures unsupported by UPX keep the Go-stripped minimal binary
 - Each archive contains only `tailscale` and `tailscaled`
-- Includes a BusyBox/POSIX sh compatible `tailscale-manager.sh`
+- Includes a BusyBox/POSIX sh compatible `tsmanager.sh`
 - Supports downloads from GitHub Releases and jsDelivr CDN
 
 ## Why this exists
@@ -62,7 +62,7 @@ Versioned download example:
 
 ```text
 https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0-small/tailscale-small_v1.88.0_linux-arm64.tar.gz
-https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0-small/tailscale-manager.sh
+https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0-small/tsmanager.sh
 ```
 
 ### jsDelivr CDN
@@ -72,7 +72,7 @@ jsDelivr cannot directly accelerate GitHub Release assets. Therefore, after publ
 Latest-version downloads:
 
 ```text
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-manager.sh
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tsmanager.sh
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_latest_linux-arm64.tar.gz
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/SHA256SUMS
 ```
@@ -80,7 +80,7 @@ https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/SHA256SUMS
 Versioned downloads:
 
 ```text
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0-small/tailscale-manager.sh
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0-small/tsmanager.sh
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0-small/tailscale-small_v1.88.0_linux-arm64.tar.gz
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0-small/SHA256SUMS
 ```
@@ -88,7 +88,7 @@ https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0-small/SHA256SUM
 The manager script can also be downloaded directly from the `main` branch source:
 
 ```text
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@main/tailscale-manager.sh
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@main/tsmanager.sh
 ```
 
 Note: jsDelivr caches files. Versioned URLs are the most stable. `latest` is convenient for automatic updates but may have short CDN propagation delays.
@@ -102,8 +102,8 @@ This layout is intended for systems where `/data` is tiny and `/tmp` has more ro
 ```sh
 mkdir -p /data/tailscale
 cd /data/tailscale
-wget -O tailscale-manager.sh https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-manager.sh
-chmod +x tailscale-manager.sh
+wget -O tsmanager.sh https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tsmanager.sh
+chmod +x tsmanager.sh
 ```
 
 If the device cannot access jsDelivr, use GitHub Releases or a LAN HTTP URL instead.
@@ -111,7 +111,7 @@ If the device cannot access jsDelivr, use GitHub Releases or a LAN HTTP URL inst
 2. First install:
 
 ```sh
-/data/tailscale/tailscale-manager.sh install
+/data/tailscale/tsmanager.sh install
 ```
 
 `install` performs three actions:
@@ -135,7 +135,7 @@ https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_
 3. Start the daemon:
 
 ```sh
-/data/tailscale/tailscale-manager.sh start
+/data/tailscale/tsmanager.sh start
 ```
 
 4. Log in:
@@ -173,7 +173,7 @@ help       show help
 
 `/data/tailscale` stores only small persistent files:
 
-- `tailscale-manager.sh`
+- `tsmanager.sh`
 - `.env`
 - `state/`
 
@@ -195,7 +195,7 @@ The socket is fixed at:
 `install` writes cron automatically. You can also refresh it manually:
 
 ```sh
-/data/tailscale/tailscale-manager.sh cron
+/data/tailscale/tsmanager.sh cron
 ```
 
 Cron runs `ensure` every 5 minutes:

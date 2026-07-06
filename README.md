@@ -15,7 +15,7 @@
 - daemon 入口软链：`tailscaled -> tailscale`
 - 尝试使用 UPX 进一步压缩；UPX 不支持的架构会保留 Go 已 strip 的极简二进制
 - 每个压缩包只包含：`tailscale` 和 `tailscaled`
-- 提供 BusyBox/POSIX sh 兼容的 `tailscale-manager.sh`
+- 提供 BusyBox/POSIX sh 兼容的 `tsmanager.sh`
 - 支持 GitHub Releases 和 jsDelivr CDN 下载
 
 ## 为什么做这个
@@ -62,7 +62,7 @@ tailscaled -> tailscale
 
 ```text
 https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0-small/tailscale-small_v1.88.0_linux-arm64.tar.gz
-https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0-small/tailscale-manager.sh
+https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0-small/tsmanager.sh
 ```
 
 ### jsDelivr CDN
@@ -72,7 +72,7 @@ jsDelivr 不能直接加速 GitHub Release assets，所以本项目的 workflow 
 最新版本下载：
 
 ```text
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-manager.sh
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tsmanager.sh
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_latest_linux-arm64.tar.gz
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/SHA256SUMS
 ```
@@ -80,7 +80,7 @@ https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/SHA256SUMS
 指定版本下载：
 
 ```text
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0-small/tailscale-manager.sh
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0-small/tsmanager.sh
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0-small/tailscale-small_v1.88.0_linux-arm64.tar.gz
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0-small/SHA256SUMS
 ```
@@ -88,7 +88,7 @@ https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0-small/SHA256SUM
 管理脚本也可以直接从 `main` 分支获取最新源码版：
 
 ```text
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@main/tailscale-manager.sh
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@main/tsmanager.sh
 ```
 
 注意：jsDelivr 会缓存文件。版本化 URL 最稳定；`latest` 适合自动更新，但可能有短时间 CDN 缓存延迟。
@@ -102,8 +102,8 @@ https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@main/tailscale-manager.sh
 ```sh
 mkdir -p /data/tailscale
 cd /data/tailscale
-wget -O tailscale-manager.sh https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-manager.sh
-chmod +x tailscale-manager.sh
+wget -O tsmanager.sh https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tsmanager.sh
+chmod +x tsmanager.sh
 ```
 
 如果设备不能访问 jsDelivr，也可以用 GitHub Releases 或局域网 HTTP 地址。
@@ -111,7 +111,7 @@ chmod +x tailscale-manager.sh
 2. 首次安装：
 
 ```sh
-/data/tailscale/tailscale-manager.sh install
+/data/tailscale/tsmanager.sh install
 ```
 
 `install` 会完成三件事：
@@ -135,7 +135,7 @@ https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_
 3. 启动：
 
 ```sh
-/data/tailscale/tailscale-manager.sh start
+/data/tailscale/tsmanager.sh start
 ```
 
 4. 登录：
@@ -173,7 +173,7 @@ help       显示帮助
 
 `/data/tailscale` 只存小文件：
 
-- `tailscale-manager.sh`
+- `tsmanager.sh`
 - `.env`
 - `state/`
 
@@ -195,7 +195,7 @@ socket 固定为：
 `install` 会自动写入 cron；也可以手动刷新：
 
 ```sh
-/data/tailscale/tailscale-manager.sh cron
+/data/tailscale/tsmanager.sh cron
 ```
 
 cron 每 5 分钟执行一次 `ensure`：

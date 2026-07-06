@@ -111,7 +111,7 @@ jobs:
           set -euo pipefail
           mkdir -p release-files
           cp artifacts/* release-files/
-          cp tailscale-manager.sh release-files/tailscale-manager.sh
+          cp tsmanager.sh release-files/tsmanager.sh
           (cd release-files && sha256sum * > SHA256SUMS)
           ls -lh release-files
       - name: Create or update release
@@ -151,7 +151,7 @@ jobs:
 
           mkdir -p "$RELEASE_TAG" latest
           cp "$GITHUB_WORKSPACE"/release-files/* "$RELEASE_TAG"/
-          cp "$GITHUB_WORKSPACE"/release-files/tailscale-manager.sh latest/tailscale-manager.sh
+          cp "$GITHUB_WORKSPACE"/release-files/tsmanager.sh latest/tsmanager.sh
 
           rm -f latest/tailscale-small_latest_*.tar.gz latest/tailscale-small_latest_*.tar.gz.sha256 latest/tailscale-small_latest_*.txt latest/SHA256SUMS
           for f in "$GITHUB_WORKSPACE"/release-files/tailscale-small_${TAILSCALE_REF}_*.tar.gz; do
