@@ -45,7 +45,7 @@ jobs:
               | sort -V \
               | tail -n 1)
           fi
-          release_tag="${ref}-small"
+          release_tag="$ref"
           should_build=true
           if [ "${FORCE:-false}" != "true" ] && gh release view "$release_tag" >/dev/null 2>&1; then
             should_build=false
@@ -88,7 +88,7 @@ jobs:
           if [ -n "${{ matrix.target.goarm }}" ]; then args="$args --goarm '${{ matrix.target.goarm }}'"; fi
           if [ -n "${{ matrix.target.gomips }}" ]; then args="$args --gomips '${{ matrix.target.gomips }}'"; fi
           if [ -n "${{ matrix.target.gomips64 }}" ]; then args="$args --gomips64 '${{ matrix.target.gomips64 }}'"; fi
-          eval "scripts/build-package.sh $args"
+          eval ".github/workflows/build-package.sh $args"
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

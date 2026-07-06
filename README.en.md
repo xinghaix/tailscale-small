@@ -61,8 +61,8 @@ tailscaled -> tailscale
 Versioned download example:
 
 ```text
-https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0-small/tailscale-small_v1.88.0_linux-arm64.tar.gz
-https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0-small/tsmanager.sh
+https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0/tailscale-small_v1.88.0_linux-arm64.tar.gz
+https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0/tsmanager.sh
 ```
 
 ### jsDelivr CDN
@@ -80,9 +80,9 @@ https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/SHA256SUMS
 Versioned downloads:
 
 ```text
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0-small/tsmanager.sh
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0-small/tailscale-small_v1.88.0_linux-arm64.tar.gz
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0-small/SHA256SUMS
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0/tsmanager.sh
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0/tailscale-small_v1.88.0_linux-arm64.tar.gz
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0/SHA256SUMS
 ```
 
 The manager script can also be downloaded directly from the `main` branch source:
@@ -205,8 +205,10 @@ Cron runs `ensure` every 5 minutes:
 
 ## Local build
 
+The build script lives at `.github/workflows/build-package.sh` because it is primarily used by GitHub Actions; it can also be run locally:
+
 ```sh
-scripts/build-package.sh \
+.github/workflows/build-package.sh \
   --ref v1.88.0 \
   --goos linux \
   --goarch arm64 \
@@ -215,7 +217,7 @@ scripts/build-package.sh \
 
 ## Automated build and release
 
-GitHub Actions checks the latest stable tag from official `tailscale/tailscale` every day. If the corresponding `vX.Y.Z-small` release does not exist, it builds all targets and publishes a release.
+GitHub Actions checks the latest stable tag from official `tailscale/tailscale` every day. If the corresponding `vX.Y.Z` release does not exist, it builds all targets and publishes a release. Release tags follow official Tailscale tags directly and do not add a `-small` suffix.
 
 Manual trigger:
 
