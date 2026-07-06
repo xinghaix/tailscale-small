@@ -16,6 +16,8 @@ This project does not fork the Tailscale source code. GitHub Actions periodicall
 - Tries UPX compression; architectures unsupported by UPX keep the Go-stripped minimal binary
 - Each archive contains only `tailscale` and `tailscaled`
 - Includes a BusyBox/POSIX sh compatible `tsmanager.sh`
+- `tsmanager.sh` automatically detects the current Linux CPU architecture by default and downloads the matching archive plus `.sha256` checksum file from jsDelivr CDN
+- The archive must pass SHA256 integrity verification before extraction and installation
 - Supports downloads from GitHub Releases and jsDelivr CDN
 
 ## Why this exists
@@ -36,6 +38,8 @@ The workflow currently attempts to build these Linux CPU architectures:
 - `linux/mips` softfloat
 - `linux/mips64le` softfloat
 - `linux/riscv64`
+
+`tsmanager.sh` maps `uname -m` and, when needed, `/proc/cpuinfo` to the target names above. If auto-detection fails, set `TARGET` manually.
 
 ## Archive contents
 
@@ -58,10 +62,13 @@ tailscaled -> tailscale
 
 ### GitHub Releases
 
+Release tags follow official Tailscale tags directly and do not add a `-small` suffix.
+
 Versioned download example:
 
 ```text
 https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0/tailscale-small_v1.88.0_linux-arm64.tar.gz
+https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0/tailscale-small_v1.88.0_linux-arm64.tar.gz.sha256
 https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0/tsmanager.sh
 ```
 
@@ -74,6 +81,7 @@ Latest-version downloads:
 ```text
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tsmanager.sh
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_latest_linux-arm64.tar.gz
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_latest_linux-arm64.tar.gz.sha256
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/SHA256SUMS
 ```
 
@@ -82,6 +90,7 @@ Versioned downloads:
 ```text
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0/tsmanager.sh
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0/tailscale-small_v1.88.0_linux-arm64.tar.gz
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0/tailscale-small_v1.88.0_linux-arm64.tar.gz.sha256
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0/SHA256SUMS
 ```
 
@@ -117,19 +126,22 @@ If the device cannot access jsDelivr, use GitHub Releases or a LAN HTTP URL inst
 `install` performs three actions:
 
 - Prompts for settings and writes `/data/tailscale/.env`
-- Downloads and installs the binary into `/tmp/tailscale`
+- Downloads the archive and matching `.sha256` file, verifies integrity, then installs the binary into `/tmp/tailscale`
 - Automatically installs the cron self-healing task
 
 The script asks for:
 
 - `statedir`, default `/data/tailscale/state`
 - `config`, optional and can be empty
-- download URL, for example jsDelivr, GitHub Release URL, or a LAN HTTP URL
+- package `target`, auto-detected by default
+- archive download URL
+- SHA256 checksum file URL
 
-Download URL example:
+The default download URLs are generated from the detected target, for example arm64:
 
 ```text
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_latest_linux-arm64.tar.gz
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_latest_linux-arm64.tar.gz.sha256
 ```
 
 3. Start the daemon:
@@ -150,21 +162,33 @@ Or use an auth key:
 /tmp/tailscale/tailscale --socket=/var/run/tailscale/tailscaled.sock up --auth-key=tskey-... --hostname=router
 ```
 
+## Custom download source
+
+If you do not use the default CDN, provide two URLs: the archive and the checksum. You can write them to `.env` or pass them as environment variables.
+
+```sh
+TS_PACKAGE_URL='https://example.com/tailscale-small_v1.88.0_linux-arm64.tar.gz' \
+TS_CHECKSUM_URL='https://example.com/tailscale-small_v1.88.0_linux-arm64.tar.gz.sha256' \
+/data/tailscale/tsmanager.sh install
+```
+
+Providing only a custom archive URL without a checksum URL is not recommended. The script defaults to `TS_PACKAGE_URL + .sha256`, so your custom source should provide that file too.
+
 ## Manager commands
 
 All commands are designed to be idempotent and safe to run repeatedly.
 
 ```text
-install    first-run config + binary install + automatic cron setup
+install    first-run config + download + checksum verification + binary install + automatic cron setup
 init       compatibility alias for install
 config     compatibility alias for install
 configure  compatibility alias for install
-update     download/install again and refresh cron
-start      start tailscaled; install first if runtime files are missing
+update     download/verify/install again, refresh cron, then start tailscaled
+start      start tailscaled; download/verify/install first if runtime files are missing
 stop       stop tailscaled; succeeds even if it is not running
 restart    restart tailscaled
-status     show config, files, process, storage, and cron status
-ensure     cron action: install if files are missing, start if process is missing
+status     show config, files, process, storage, cron, and download URLs
+ensure     cron action: read .env/defaults, install if needed, start if needed; idempotent
 cron       automatically write or update the cron job without duplicating it
 help       show help
 ```
@@ -198,10 +222,18 @@ The socket is fixed at:
 /data/tailscale/tsmanager.sh cron
 ```
 
-Cron runs `ensure` every 5 minutes:
+Cron runs `ensure` every 5 minutes. It performs the full install + start self-healing flow:
 
-- If the binary in `/tmp` is missing, it downloads and installs it again
-- If the `tailscaled` process is missing, it starts it again
+- Reads download source, target, state directory, and other settings from `.env` plus defaults
+- If the binary in `/tmp` is missing, downloads the archive and `.sha256`, verifies, and installs it
+- If the `tailscaled` process is missing, starts it
+- If already installed and running, skips work and remains idempotent
+
+By default `UPDATE_ON_ENSURE=0`, so cron does not download every 5 minutes. To force verification/update every cron run, set this in `.env`:
+
+```sh
+UPDATE_ON_ENSURE=1
+```
 
 ## Local build
 

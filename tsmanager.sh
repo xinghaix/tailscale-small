@@ -3,7 +3,7 @@
 # 兼容 POSIX sh / BusyBox sh。
 #
 # 目录策略：
-#   /data/tailscale/tsmanager.sh   持久脚本
+#   /data/tailscale/tsmanager.sh           持久脚本
 #   /data/tailscale/.env                   持久配置
 #   /data/tailscale/state/                 持久状态目录
 #   /tmp/tailscale/tailscale               大体积二进制
@@ -19,12 +19,16 @@
 #   chmod +x /data/tailscale/tsmanager.sh
 #   /data/tailscale/tsmanager.sh install
 #
+# 默认下载源会根据当前 Linux CPU 架构自动选择 jsDelivr CDN 上的 latest 包，
+# 并下载对应 .sha256 文件校验完整性。自定义下载源时需要同时提供包 URL 和 checksum URL。
 
 set -eu
 
+SCRIPT_NAME=tsmanager.sh
 DATA_DIR=${DATA_DIR:-/data/tailscale}
 ENV_FILE=${ENV_FILE:-$DATA_DIR/.env}
 if [ -f "$ENV_FILE" ]; then
+    # .env 由本脚本生成，格式为 KEY='value'。
     # shellcheck disable=SC1090
     . "$ENV_FILE"
 fi
@@ -32,7 +36,12 @@ fi
 DATA_DIR=${DATA_DIR:-/data/tailscale}
 ENV_FILE=${ENV_FILE:-$DATA_DIR/.env}
 TMP_DIR=${TMP_DIR:-/tmp/tailscale}
-RUN_DIR=/var/run/tailscale
+RUN_DIR=${RUN_DIR:-}
+SOCKET=${SOCKET:-}
+if [ -z "$RUN_DIR" ] && [ -n "$SOCKET" ]; then
+    RUN_DIR=$(dirname "$SOCKET")
+fi
+RUN_DIR=${RUN_DIR:-/var/run/tailscale}
 SOCKET=${SOCKET:-$RUN_DIR/tailscaled.sock}
 BIN=${BIN:-$TMP_DIR/tailscale}
 CLI=${CLI:-$BIN}
@@ -41,13 +50,19 @@ STATEDIR=${STATEDIR:-$DATA_DIR/state}
 CONFIG=${CONFIG:-}
 PIDFILE=${PIDFILE:-$TMP_DIR/tailscaled.pid}
 LOGFILE=${LOGFILE:-$TMP_DIR/tailscaled.log}
-PACKAGE_URL=${TS_PACKAGE_URL:-${PACKAGE_URL:-http://192.168.2.101:8000/tailscale-small-linux-arm64.tar.gz}}
+CDN_BASE=${TS_CDN_BASE:-${CDN_BASE:-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest}}
+TARGET=${TS_TARGET:-${TAILSCALE_TARGET:-${TARGET:-}}}
+PACKAGE_URL=${TS_PACKAGE_URL:-${PACKAGE_URL:-}}
+CHECKSUM_URL=${TS_CHECKSUM_URL:-${CHECKSUM_URL:-}}
 MIN_DATA_FREE_KB=${MIN_DATA_FREE_KB:-${MIN_FREE_KB:-64}}
 MIN_TMP_FREE_KB=${MIN_TMP_FREE_KB:-8192}
 TAILSCALED_ARGS=${TAILSCALED_ARGS:---tun=tailscale0}
+UPDATE_ON_ENSURE=${UPDATE_ON_ENSURE:-0}
 
 CRON_BEGIN='# BEGIN tsmanager.sh'
 CRON_END='# END tsmanager.sh'
+OLD_CRON_BEGIN='# BEGIN tailscale-manager.sh'
+OLD_CRON_END='# END tailscale-manager.sh'
 
 log() {
     printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -89,9 +104,7 @@ check_space() {
 quote_env() {
     case "$1" in
         '') printf "''" ;;
-        *)
-            printf "%s" "$1" | sed "s/'/'\\''/g; 1s/^/'/; \$s/\$/'/"
-            ;;
+        *) printf "%s" "$1" | sed "s/'/'\\''/g; 1s/^/'/; \$s/\$/'/" ;;
     esac
 }
 
@@ -104,10 +117,14 @@ save_env() {
         printf 'TMP_DIR=%s\n' "$(quote_env "$TMP_DIR")"
         printf 'STATEDIR=%s\n' "$(quote_env "$STATEDIR")"
         printf 'CONFIG=%s\n' "$(quote_env "$CONFIG")"
+        printf 'CDN_BASE=%s\n' "$(quote_env "$CDN_BASE")"
+        printf 'TARGET=%s\n' "$(quote_env "$TARGET")"
         printf 'TS_PACKAGE_URL=%s\n' "$(quote_env "$PACKAGE_URL")"
+        printf 'TS_CHECKSUM_URL=%s\n' "$(quote_env "$CHECKSUM_URL")"
         printf 'MIN_DATA_FREE_KB=%s\n' "$(quote_env "$MIN_DATA_FREE_KB")"
         printf 'MIN_TMP_FREE_KB=%s\n' "$(quote_env "$MIN_TMP_FREE_KB")"
         printf 'TAILSCALED_ARGS=%s\n' "$(quote_env "$TAILSCALED_ARGS")"
+        printf 'UPDATE_ON_ENSURE=%s\n' "$(quote_env "$UPDATE_ON_ENSURE")"
     } >"$tmp"
     chmod 0600 "$tmp" 2>/dev/null || true
 
@@ -119,6 +136,76 @@ save_env() {
 
     mv "$tmp" "$ENV_FILE"
     log "配置已写入 $ENV_FILE"
+}
+
+cpu_arch() {
+    uname -m 2>/dev/null || printf unknown
+}
+
+arm_version_from_cpuinfo() {
+    if [ -r /proc/cpuinfo ]; then
+        awk -F: '
+            /CPU architecture/ {
+                gsub(/^[ \t]+|[ \t]+$/, "", $2)
+                gsub(/[^0-9]/, "", $2)
+                if ($2 != "") { print $2; exit }
+            }
+        ' /proc/cpuinfo 2>/dev/null
+    fi
+}
+
+detect_target() {
+    if [ -n "$TARGET" ]; then
+        printf '%s\n' "$TARGET"
+        return 0
+    fi
+
+    os=$(uname -s 2>/dev/null || printf unknown)
+    case "$os" in
+        Linux|linux) ;;
+        *) fail "当前系统不是 Linux，无法自动选择 tailscale-small 包；请设置 TARGET 或 TS_PACKAGE_URL/TS_CHECKSUM_URL" ;;
+    esac
+
+    arch=$(cpu_arch)
+    case "$arch" in
+        x86_64|amd64) printf 'linux-amd64\n' ;;
+        i386|i486|i586|i686) printf 'linux-386\n' ;;
+        aarch64|arm64) printf 'linux-arm64\n' ;;
+        armv7l|armv7*|armv8l) printf 'linux-arm-v7\n' ;;
+        armv6l|armv6*) printf 'linux-arm-v6\n' ;;
+        armv5l|armv5*|armel) printf 'linux-arm-v5\n' ;;
+        arm*)
+            v=$(arm_version_from_cpuinfo || true)
+            case "$v" in
+                8|7) printf 'linux-arm-v7\n' ;;
+                6) printf 'linux-arm-v6\n' ;;
+                5) printf 'linux-arm-v5\n' ;;
+                *) fail "无法识别 ARM 版本：uname -m=$arch；请设置 TARGET=linux-arm-v7/linux-arm-v6/linux-arm-v5" ;;
+            esac
+            ;;
+        mipsel|mipsle) printf 'linux-mipsle-softfloat\n' ;;
+        mips) printf 'linux-mips-softfloat\n' ;;
+        mips64el|mips64le) printf 'linux-mips64le-softfloat\n' ;;
+        riscv64) printf 'linux-riscv64\n' ;;
+        *) fail "不支持或无法识别的 CPU 架构：$arch；请设置 TARGET 或 TS_PACKAGE_URL/TS_CHECKSUM_URL" ;;
+    esac
+}
+
+effective_package_url() {
+    if [ -n "$PACKAGE_URL" ]; then
+        printf '%s\n' "$PACKAGE_URL"
+        return 0
+    fi
+    target=$(detect_target)
+    printf '%s/tailscale-small_latest_%s.tar.gz\n' "$CDN_BASE" "$target"
+}
+
+effective_checksum_url() {
+    if [ -n "$CHECKSUM_URL" ]; then
+        printf '%s\n' "$CHECKSUM_URL"
+        return 0
+    fi
+    printf '%s.sha256\n' "$(effective_package_url)"
 }
 
 ask_value() {
@@ -137,6 +224,8 @@ ask_value() {
         STATEDIR) STATEDIR=$ans ;;
         CONFIG) CONFIG=$ans ;;
         PACKAGE_URL) PACKAGE_URL=$ans ;;
+        CHECKSUM_URL) CHECKSUM_URL=$ans ;;
+        TARGET) TARGET=$ans ;;
         *) fail "内部错误：不支持的配置项 $name" ;;
     esac
 }
@@ -144,13 +233,22 @@ ask_value() {
 configure_interactive() {
     make_base_dirs
     echo "首次配置 Tailscale，直接回车使用默认值。" >&2
+    default_target=${TARGET:-}
+    if [ -z "$default_target" ]; then
+        default_target=$(detect_target)
+    fi
+    default_package=${PACKAGE_URL:-$CDN_BASE/tailscale-small_latest_${default_target}.tar.gz}
+    default_checksum=${CHECKSUM_URL:-$default_package.sha256}
     ask_value STATEDIR "状态目录 statedir（小文件，建议放 /data）" "$STATEDIR"
     ask_value CONFIG "配置文件 config（可留空；非空时会传给 tailscaled --config）" "$CONFIG"
-    ask_value PACKAGE_URL "局域网下载地址" "$PACKAGE_URL"
+    ask_value TARGET "包架构 target" "$default_target"
+    ask_value PACKAGE_URL "压缩包下载地址" "$default_package"
+    ask_value CHECKSUM_URL "SHA256 校验文件下载地址" "$default_checksum"
     save_env
 }
 
 ensure_config() {
+    mode=${1:-auto}
     if [ -f "$ENV_FILE" ]; then
         return 0
     fi
@@ -158,7 +256,12 @@ ensure_config() {
         save_env
         return 0
     fi
-    configure_interactive
+    if [ "$mode" = interactive ] && [ -t 0 ]; then
+        configure_interactive
+        return 0
+    fi
+    log "未找到 $ENV_FILE，使用默认配置生成；如需自定义下载源，请先交互运行：$0 install"
+    save_env
 }
 
 download_file() {
@@ -173,6 +276,36 @@ download_file() {
     else
         fail "需要 curl、wget 或 busybox wget 才能下载：$url"
     fi
+}
+
+sha256_of_file() {
+    file=$1
+    if have sha256sum; then
+        sha256sum "$file" | awk '{print $1}'
+    elif have shasum; then
+        shasum -a 256 "$file" | awk '{print $1}'
+    elif have busybox && busybox sha256sum --help >/dev/null 2>&1; then
+        busybox sha256sum "$file" | awk '{print $1}'
+    else
+        fail "需要 sha256sum、shasum 或 busybox sha256sum 才能校验完整性"
+    fi
+}
+
+verify_checksum() {
+    pkg=$1
+    sumfile=$2
+    expected=$(sed -n 's/^\([A-Fa-f0-9][A-Fa-f0-9]*\).*/\1/p' "$sumfile" | sed -n '1p')
+    case "$expected" in
+        ????????????????????????????????????????????????????????????????) ;;
+        *) fail "校验文件格式不正确：$sumfile" ;;
+    esac
+    actual=$(sha256_of_file "$pkg")
+    expected_lc=$(printf '%s' "$expected" | tr 'A-F' 'a-f')
+    actual_lc=$(printf '%s' "$actual" | tr 'A-F' 'a-f')
+    if [ "$expected_lc" != "$actual_lc" ]; then
+        fail "SHA256 校验失败：期望 $expected_lc，实际 $actual_lc"
+    fi
+    log "SHA256 校验通过：$actual_lc"
 }
 
 extract_package() {
@@ -190,17 +323,23 @@ extract_package() {
 }
 
 install_package() {
-    ensure_config
+    ensure_config auto
     make_base_dirs
     check_space "$DATA_DIR" "$MIN_DATA_FREE_KB"
     check_space "$TMP_DIR" "$MIN_TMP_FREE_KB"
 
     pkg="$TMP_DIR/tailscale-package.$$.tar.gz"
+    sumfile="$pkg.sha256"
     unpack="$TMP_DIR/unpack.$$"
-    rm -rf "$pkg" "$unpack"
+    rm -rf "$pkg" "$sumfile" "$unpack"
 
-    log "下载 $PACKAGE_URL"
-    download_file "$PACKAGE_URL" "$pkg"
+    pkg_url=$(effective_package_url)
+    sum_url=$(effective_checksum_url)
+    log "下载压缩包：$pkg_url"
+    download_file "$pkg_url" "$pkg"
+    log "下载校验文件：$sum_url"
+    download_file "$sum_url" "$sumfile"
+    verify_checksum "$pkg" "$sumfile"
     extract_package "$pkg" "$unpack"
 
     src=""
@@ -232,7 +371,7 @@ install_package() {
         "$DATA_DIR/tailscale.combined" "$DATA_DIR/tailscale.combined.old" \
         "$TMP_DIR/tailscale.combined" "$TMP_DIR/tailscale.combined.old"
 
-    rm -rf "$pkg" "$unpack"
+    rm -rf "$pkg" "$sumfile" "$unpack"
 }
 
 files_ok() {
@@ -267,7 +406,7 @@ is_running() {
 }
 
 start_tailscaled() {
-    ensure_config
+    ensure_config auto
     make_base_dirs
     make_run_dir
     files_ok || install_package
@@ -347,14 +486,16 @@ cron_target() {
 cron_block() {
     cat <<EOF
 $CRON_BEGIN
-# 每 5 分钟检查一次，日志写到 /tmp，避免占用 /data。
-*/5 * * * * mkdir -p "$TMP_DIR" && DATA_DIR="$DATA_DIR" TMP_DIR="$TMP_DIR" "$DATA_DIR/tsmanager.sh" ensure >>"$TMP_DIR/manager.log" 2>&1
+# 每 5 分钟执行完整自愈流程：必要时安装/校验 tailscale，然后启动 tailscaled。日志写到 /tmp，避免占用 /data。
+*/5 * * * * mkdir -p "$TMP_DIR" && DATA_DIR="$DATA_DIR" TMP_DIR="$TMP_DIR" "$DATA_DIR/$SCRIPT_NAME" ensure >>"$TMP_DIR/manager.log" 2>&1
 $CRON_END
 EOF
 }
 
 cron_present_in_text() {
-    printf '%s\n' "$1" | grep -Fq "$CRON_BEGIN"
+    text=$1
+    printf '%s\n' "$text" | grep -Fq "$CRON_BEGIN" && return 0
+    printf '%s\n' "$text" | grep -Fq "$OLD_CRON_BEGIN"
 }
 
 write_cron() {
@@ -373,16 +514,12 @@ write_cron() {
         fi
     fi
 
-    if [ -f "$old" ] && cron_present_in_text "$(cat "$old" 2>/dev/null || true)"; then
-        awk -v begin="$CRON_BEGIN" -v end="$CRON_END" '
-            $0 == begin {skip = 1; next}
-            $0 == end {skip = 0; next}
-            skip {next}
-            {print}
-        ' "$old" >"$new"
-    else
-        cat "$old" >"$new"
-    fi
+    awk -v begin="$CRON_BEGIN" -v end="$CRON_END" -v old_begin="$OLD_CRON_BEGIN" -v old_end="$OLD_CRON_END" '
+        $0 == begin || $0 == old_begin {skip = 1; next}
+        $0 == end || $0 == old_end {skip = 0; next}
+        skip {next}
+        {print}
+    ' "$old" >"$new"
 
     cron_block >>"$new"
     chmod 0644 "$new" 2>/dev/null || true
@@ -395,6 +532,7 @@ write_cron() {
 
     if [ "$target" = crontab ]; then
         crontab "$new"
+        rm -f "$new"
     else
         mv "$new" "$target"
     fi
@@ -424,7 +562,14 @@ status() {
     printf '状态目录 STATEDIR=%s\n' "$STATEDIR"
     printf '配置文件 CONFIG=%s\n' "$CONFIG"
     printf 'socket=%s\n' "$SOCKET"
-    printf '下载地址 PACKAGE_URL=%s\n' "$PACKAGE_URL"
+    printf 'CDN_BASE=%s\n' "$CDN_BASE"
+    if target=$(detect_target 2>/dev/null); then
+        printf '目标架构 TARGET=%s\n' "$target"
+    else
+        printf '目标架构 TARGET=unknown\n'
+    fi
+    printf '压缩包 URL=%s\n' "$(effective_package_url 2>/dev/null || printf 'unknown')"
+    printf '校验文件 URL=%s\n' "$(effective_checksum_url 2>/dev/null || printf 'unknown')"
 
     if files_ok; then
         printf '文件状态=正常\n'
@@ -458,20 +603,24 @@ status() {
 }
 
 ensure_all() {
-    ensure_config
+    ensure_config auto
     make_base_dirs
-    if ! files_ok; then
-        log "tailscale 文件缺失，开始安装"
+    if [ "$UPDATE_ON_ENSURE" = 1 ] || ! files_ok; then
+        log "执行安装/校验流程"
         install_package
+    else
+        log "tailscale 文件已存在，跳过下载安装"
     fi
     if ! is_running; then
-        log "tailscaled 进程不存在，开始启动"
+        log "执行启动流程"
         start_tailscaled
+    else
+        log "tailscaled 已运行"
     fi
 }
 
 install_all() {
-    ensure_config
+    ensure_config interactive
     install_package
     write_cron
 }
@@ -481,33 +630,48 @@ usage() {
 用法：$0 命令
 
 命令：
-  install    首次配置 + 安装二进制 + 自动写入 cron，重复执行幂等
+  install    首次配置 + 下载校验 + 安装二进制 + 自动写入 cron，重复执行幂等
   init       兼容旧命令，等同于 install
   config     兼容旧命令，等同于 install
   configure  兼容旧命令，等同于 install
-  update     重新下载/安装并刷新 cron
-  start     启动 tailscaled；如果二进制缺失会先安装
-  stop      停止 tailscaled
-  restart   重启 tailscaled
-  status    查看配置、文件、进程、空间和 cron 状态
-  ensure    cron 使用：文件缺失则安装，进程缺失则启动
-  cron      自动把定时任务写入系统 crontab，重复执行幂等
-  help      显示此帮助
+  update     重新下载/校验/安装并刷新 cron，然后启动 tailscaled
+  start      启动 tailscaled；如果二进制缺失会先下载校验并安装
+  stop       停止 tailscaled；未运行也返回成功
+  restart    重启 tailscaled
+  status     查看配置、文件、进程、空间、cron 和下载 URL
+  ensure     cron 使用：从 .env/默认配置读取，必要时安装并启动，幂等
+  cron       自动把定时任务写入系统 crontab，重复执行幂等
+  help       显示此帮助
 
-目录策略：
-  /data/tailscale 只放小文件：tsmanager.sh、.env、state/
-  /tmp/tailscale 放二进制、下载包、解压目录、pid、日志
-  socket 固定为：/var/run/tailscale/tailscaled.sock
+默认下载：
+  自动检测 Linux CPU 架构，并从 jsDelivr CDN 下载两个文件：
+  1) tailscale-small_latest_<target>.tar.gz
+  2) tailscale-small_latest_<target>.tar.gz.sha256
+  下载后必须通过 SHA256 校验才会解压安装。
+
+自定义下载：
+  在 .env 或环境变量中同时设置：
+  TS_PACKAGE_URL=https://example/tailscale-small_xxx.tar.gz
+  TS_CHECKSUM_URL=https://example/tailscale-small_xxx.tar.gz.sha256
 
 .env 配置项：
   DATA_DIR=/data/tailscale
   TMP_DIR=/tmp/tailscale
   STATEDIR=/data/tailscale/state
   CONFIG=                 # 可留空；非空时传给 tailscaled --config
-  TS_PACKAGE_URL=http://192.168.2.101:8000/tailscale-small-linux-arm64.tar.gz
+  CDN_BASE=https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest
+  TARGET=                 # 可留空自动检测；或 linux-arm64/linux-arm-v7 等
+  TS_PACKAGE_URL=         # 可留空使用 CDN + TARGET 默认值
+  TS_CHECKSUM_URL=        # 可留空使用 TS_PACKAGE_URL.sha256
   MIN_DATA_FREE_KB=64
   MIN_TMP_FREE_KB=8192
   TAILSCALED_ARGS='--tun=tailscale0'
+  UPDATE_ON_ENSURE=0      # 设为 1 时 cron 每次都会重新下载校验
+
+目录策略：
+  /data/tailscale 只放小文件：tsmanager.sh、.env、state/
+  /tmp/tailscale 放二进制、下载包、解压目录、pid、日志
+  socket 固定为：/var/run/tailscale/tailscaled.sock
 
 压缩包格式：
   tailscale
@@ -528,7 +692,7 @@ case "$cmd" in
         install_all
         ;;
     update)
-        ensure_config
+        ensure_config auto
         stop_tailscaled
         install_package
         write_cron
@@ -551,7 +715,7 @@ case "$cmd" in
         ensure_all
         ;;
     cron)
-        ensure_config
+        ensure_config auto
         write_cron
         ;;
     help|-h|--help)
