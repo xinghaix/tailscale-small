@@ -165,7 +165,7 @@ https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_
 只需设置一个下载地址，checksum 文件放在同路径的 `<地址>.sha256`。可以写入 `.env`，也可以临时通过环境变量传入。
 
 ```sh
-TS_PACKAGE_URL='https://example.com/tailscale-small_v1.88.0_linux-arm64.tar.gz' \
+PACKAGE_URL='https://example.com/tailscale-small_v1.88.0_linux-arm64.tar.gz' \
 /data/tailscale/tsmanager.sh install
 ```
 
@@ -197,7 +197,7 @@ help       显示帮助
 卸载会执行工程化清理：
 
 - 停止 `tailscaled`
-- 移除 `tsmanager.sh` 写入的 cron block（兼容清理旧的 `tailscale-manager.sh` block）
+- 移除 `tsmanager.sh` 写入的 cron block
 - 删除 `/tmp/tailscale` 里的运行时文件、二进制、pid、日志、临时下载包和解压目录
 - 默认保留 `/data/tailscale/.env`、状态目录和脚本本身
 - 交互询问是否删除配置/状态目录

@@ -52,17 +52,15 @@ STATEDIR=${STATEDIR:-$DATA_DIR/state}
 CONFIG=${CONFIG:-}
 PIDFILE=${PIDFILE:-$TMP_DIR/tailscaled.pid}
 LOGFILE=${LOGFILE:-$TMP_DIR/tailscaled.log}
-TARGET=${TS_TARGET:-${TAILSCALE_TARGET:-${TARGET:-}}}
-PACKAGE_URL=${TS_PACKAGE_URL:-${PACKAGE_URL:-}}
-MIN_DATA_FREE_KB=${MIN_DATA_FREE_KB:-${MIN_FREE_KB:-64}}
+TARGET=${TARGET:-}
+PACKAGE_URL=${PACKAGE_URL:-}
+MIN_DATA_FREE_KB=${MIN_DATA_FREE_KB:-64}
 MIN_TMP_FREE_KB=${MIN_TMP_FREE_KB:-8192}
 TAILSCALED_ARGS=${TAILSCALED_ARGS:---tun=tailscale0}
 UPDATE_ON_ENSURE=${UPDATE_ON_ENSURE:-0}
 
 CRON_BEGIN='# BEGIN tsmanager.sh'
 CRON_END='# END tsmanager.sh'
-OLD_CRON_BEGIN='# BEGIN tailscale-manager.sh'
-OLD_CRON_END='# END tailscale-manager.sh'
 
 log() {
     printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -113,12 +111,11 @@ save_env() {
     tmp="$ENV_FILE.$$"
     {
         echo "# tsmanager.sh 自动生成的配置文件"
-        echo "# 只保存与默认值不同的配置项。自动推导的 CDN 地址和 checksum 不写入。"
         printf 'DATA_DIR=%s\n' "$(quote_env "$DATA_DIR")"
         printf 'TMP_DIR=%s\n' "$(quote_env "$TMP_DIR")"
         printf 'STATEDIR=%s\n' "$(quote_env "$STATEDIR")"
         printf 'CONFIG=%s\n' "$(quote_env "$CONFIG")"
-        printf 'TS_PACKAGE_URL=%s\n' "$(quote_env "$PACKAGE_URL")"
+        printf 'PACKAGE_URL=%s\n' "$(quote_env "$PACKAGE_URL")"
         printf 'MIN_DATA_FREE_KB=%s\n' "$(quote_env "$MIN_DATA_FREE_KB")"
         printf 'MIN_TMP_FREE_KB=%s\n' "$(quote_env "$MIN_TMP_FREE_KB")"
         printf 'TAILSCALED_ARGS=%s\n' "$(quote_env "$TAILSCALED_ARGS")"
@@ -161,7 +158,7 @@ detect_target() {
     os=$(uname -s 2>/dev/null || printf unknown)
     case "$os" in
         Linux|linux) ;;
-        *) fail "当前系统不是 Linux，无法自动选择 tailscale-small 包；请设置 TARGET 或 TS_PACKAGE_URL" ;;
+        *) fail "当前系统不是 Linux，无法自动选择 tailscale-small 包；请设置 TARGET 或 PACKAGE_URL" ;;
     esac
 
     arch=$(cpu_arch)
@@ -185,7 +182,7 @@ detect_target() {
         mips) printf 'linux-mips-softfloat\n' ;;
         mips64el|mips64le) printf 'linux-mips64le-softfloat\n' ;;
         riscv64) printf 'linux-riscv64\n' ;;
-        *) fail "不支持或无法识别的 CPU 架构：$arch；请设置 TARGET 或 TS_PACKAGE_URL" ;;
+        *) fail "不支持或无法识别的 CPU 架构：$arch；请设置 TARGET 或 PACKAGE_URL" ;;
     esac
 }
 
@@ -339,7 +336,6 @@ install_package() {
     if [ -f "$unpack/tailscale" ]; then
         src="$unpack/tailscale"
     elif [ -f "$unpack/tailscale.combined" ]; then
-        # 兼容旧包；新包应直接包含 tailscale。
         src="$unpack/tailscale.combined"
     else
         fail "压缩包里没有 tailscale"
@@ -358,12 +354,6 @@ install_package() {
     fi
 
     ln -sf tailscale "$DAEMON"
-
-    # 清理早期版本可能放到 /data 的大文件，避免占用小分区。
-    rm -f "$DATA_DIR/tailscale" "$DATA_DIR/tailscaled" \
-        "$DATA_DIR/tailscale.combined" "$DATA_DIR/tailscale.combined.old" \
-        "$TMP_DIR/tailscale.combined" "$TMP_DIR/tailscale.combined.old"
-
     rm -rf "$pkg" "$sumfile" "$unpack"
 }
 
@@ -486,9 +476,7 @@ EOF
 }
 
 cron_present_in_text() {
-    text=$1
-    printf '%s\n' "$text" | grep -Fq "$CRON_BEGIN" && return 0
-    printf '%s\n' "$text" | grep -Fq "$OLD_CRON_BEGIN"
+    printf '%s\n' "$1" | grep -Fq "$CRON_BEGIN"
 }
 
 write_cron() {
@@ -507,9 +495,9 @@ write_cron() {
         fi
     fi
 
-    awk -v begin="$CRON_BEGIN" -v end="$CRON_END" -v old_begin="$OLD_CRON_BEGIN" -v old_end="$OLD_CRON_END" '
-        $0 == begin || $0 == old_begin {skip = 1; next}
-        $0 == end || $0 == old_end {skip = 0; next}
+    awk -v begin="$CRON_BEGIN" -v end="$CRON_END" '
+        $0 == begin {skip = 1; next}
+        $0 == end {skip = 0; next}
         skip {next}
         {print}
     ' "$old" >"$new"
@@ -556,9 +544,9 @@ remove_cron() {
         fi
     fi
 
-    awk -v begin="$CRON_BEGIN" -v end="$CRON_END" -v old_begin="$OLD_CRON_BEGIN" -v old_end="$OLD_CRON_END" '
-        $0 == begin || $0 == old_begin {skip = 1; next}
-        $0 == end || $0 == old_end {skip = 0; next}
+    awk -v begin="$CRON_BEGIN" -v end="$CRON_END" '
+        $0 == begin {skip = 1; next}
+        $0 == end {skip = 0; next}
         skip {next}
         {print}
     ' "$old" >"$new"
@@ -688,7 +676,7 @@ ask_yes_no_default_no() {
 
 remove_runtime_files() {
     rm -f "$BIN" "$DAEMON" "$PIDFILE" "$LOGFILE" "$SOCKET" \
-        "$TMP_DIR/tailscale.old" "$TMP_DIR/tailscale.combined" "$TMP_DIR/tailscale.combined.old" \
+        "$TMP_DIR/tailscale.old" \
         "$TMP_DIR/manager.log"
     rm -f "$TMP_DIR"/tailscale-package.*.tar.gz "$TMP_DIR"/tailscale-package.*.tar.gz.sha256 2>/dev/null || true
     rm -rf "$TMP_DIR"/unpack.* 2>/dev/null || true
@@ -762,14 +750,14 @@ usage() {
   下载后必须通过 SHA256 校验才会解压安装。
 
   自定义 = 设置一个下载地址即可。checksum 文件只需放在同路径的 <地址>.sha256：
-    TS_PACKAGE_URL=https://example.com/tailscale-small_xxx.tar.gz
+    PACKAGE_URL=https://example.com/tailscale-small_xxx.tar.gz
 
 .env 配置项（只保存用户显式配置，自动推导项不写入）：
   DATA_DIR=/data/tailscale
   TMP_DIR=/tmp/tailscale
   STATEDIR=/data/tailscale/state
   CONFIG=                 # 可留空；非空时传给 tailscaled --config
-  TS_PACKAGE_URL=         # 可留空使用 CDN 默认值
+  PACKAGE_URL=            # 可留空使用 CDN 默认值
   MIN_DATA_FREE_KB=64
   MIN_TMP_FREE_KB=8192
   TAILSCALED_ARGS='--tun=tailscale0'

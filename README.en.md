@@ -165,7 +165,7 @@ Or use an auth key:
 Only one URL is needed; the checksum file must be at `<url>.sha256`. You can write it to `.env` or pass it as an environment variable.
 
 ```sh
-TS_PACKAGE_URL='https://example.com/tailscale-small_v1.88.0_linux-arm64.tar.gz' \
+PACKAGE_URL='https://example.com/tailscale-small_v1.88.0_linux-arm64.tar.gz' \
 /data/tailscale/tsmanager.sh install
 ```
 
@@ -197,7 +197,7 @@ Run:
 Uninstall performs structured cleanup:
 
 - Stops `tailscaled`
-- Removes the cron block written by `tsmanager.sh` and also cleans the old `tailscale-manager.sh` block if present
+- Removes the cron block written by `tsmanager.sh`
 - Deletes runtime files under `/tmp/tailscale`, including binaries, pid/log files, temporary downloads, and unpack directories
 - Keeps `/data/tailscale/.env`, the state directory, and the script itself by default
 - Interactively asks whether to delete config/state
