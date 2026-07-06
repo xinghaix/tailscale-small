@@ -61,8 +61,8 @@ tailscaled -> tailscale
 版本化下载示例：
 
 ```text
-https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0-small/tailscale-small_v1.88.0_linux-arm64.tar.gz
-https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0-small/tsmanager.sh
+https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0/tailscale-small_v1.88.0_linux-arm64.tar.gz
+https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0/tsmanager.sh
 ```
 
 ### jsDelivr CDN
@@ -80,9 +80,9 @@ https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/SHA256SUMS
 指定版本下载：
 
 ```text
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0-small/tsmanager.sh
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0-small/tailscale-small_v1.88.0_linux-arm64.tar.gz
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0-small/SHA256SUMS
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0/tsmanager.sh
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0/tailscale-small_v1.88.0_linux-arm64.tar.gz
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0/SHA256SUMS
 ```
 
 管理脚本也可以直接从 `main` 分支获取最新源码版：
@@ -205,8 +205,10 @@ cron 每 5 分钟执行一次 `ensure`：
 
 ## 本地构建
 
+构建脚本放在 `.github/workflows/build-package.sh`，因为它主要服务于 GitHub Actions；也可以本地直接运行：
+
 ```sh
-scripts/build-package.sh \
+.github/workflows/build-package.sh \
   --ref v1.88.0 \
   --goos linux \
   --goarch arm64 \
@@ -215,7 +217,7 @@ scripts/build-package.sh \
 
 ## 自动构建和发布
 
-GitHub Actions 每天检查官方 `tailscale/tailscale` 最新稳定 tag。如果对应的 `vX.Y.Z-small` release 不存在，就自动构建所有架构并发布。
+GitHub Actions 每天检查官方 `tailscale/tailscale` 最新稳定 tag。如果对应的 `vX.Y.Z` release 不存在，就自动构建所有架构并发布。Release tag 命名直接跟随官方 Tailscale tag，不额外添加 `-small` 后缀。
 
 也可以手动触发：
 
