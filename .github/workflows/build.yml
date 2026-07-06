@@ -14,7 +14,8 @@ on:
         type: choice
         options: ['false', 'true']
   schedule:
-    - cron: '17 3 * * *'
+    # 每月 1 日检查一次上游 Tailscale 最新稳定版；本仓库没有同名 release 时才构建发布。
+    - cron: '17 3 1 * *'
 
 permissions:
   contents: write
@@ -135,8 +136,8 @@ jobs:
           TAILSCALE_REF: ${{ needs.resolve.outputs.tailscale_ref }}
         run: |
           set -euo pipefail
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "xinghaix"
+          git config --global user.email "xinghaix@github.com"
 
           cd "$RUNNER_TEMP"
           rm -rf tailscale-small-cdn
