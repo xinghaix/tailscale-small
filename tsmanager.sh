@@ -4,7 +4,7 @@
 #
 # 目录策略：
 #   /data/tailscale/tsmanager.sh           持久脚本
-#   /data/tailscale/.env                   持久配置
+#   /data/tailscale/.env                   持久配置（仅保存用户显式配置，自动推导项不写入）
 #   /data/tailscale/state/                 持久状态目录
 #   /tmp/tailscale/tailscale               大体积二进制
 #   /tmp/tailscale/tailscaled -> tailscale daemon 入口软链
@@ -19,16 +19,18 @@
 #   chmod +x /data/tailscale/tsmanager.sh
 #   /data/tailscale/tsmanager.sh install
 #
-# 默认下载源会根据当前 Linux CPU 架构自动选择 jsDelivr CDN 上的 latest 包，
-# 并下载对应 .sha256 文件校验完整性。自定义下载源时需要同时提供包 URL 和 checksum URL。
+# 默认下载：自动检测当前 Linux CPU 架构，从 jsDelivr CDN 下载匹配的
+# tailscale-small_latest_<target>.tar.gz，并自动校验同名 .sha256 文件。
+# 也支持自定义下载地址（checksum 自动从地址 + .sha256 推导）。
 
 set -eu
+
+CDN_LATEST=https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest
 
 SCRIPT_NAME=tsmanager.sh
 DATA_DIR=${DATA_DIR:-/data/tailscale}
 ENV_FILE=${ENV_FILE:-$DATA_DIR/.env}
 if [ -f "$ENV_FILE" ]; then
-    # .env 由本脚本生成，格式为 KEY='value'。
     # shellcheck disable=SC1090
     . "$ENV_FILE"
 fi
@@ -50,10 +52,8 @@ STATEDIR=${STATEDIR:-$DATA_DIR/state}
 CONFIG=${CONFIG:-}
 PIDFILE=${PIDFILE:-$TMP_DIR/tailscaled.pid}
 LOGFILE=${LOGFILE:-$TMP_DIR/tailscaled.log}
-CDN_BASE=${TS_CDN_BASE:-${CDN_BASE:-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest}}
 TARGET=${TS_TARGET:-${TAILSCALE_TARGET:-${TARGET:-}}}
 PACKAGE_URL=${TS_PACKAGE_URL:-${PACKAGE_URL:-}}
-CHECKSUM_URL=${TS_CHECKSUM_URL:-${CHECKSUM_URL:-}}
 MIN_DATA_FREE_KB=${MIN_DATA_FREE_KB:-${MIN_FREE_KB:-64}}
 MIN_TMP_FREE_KB=${MIN_TMP_FREE_KB:-8192}
 TAILSCALED_ARGS=${TAILSCALED_ARGS:---tun=tailscale0}
@@ -113,14 +113,12 @@ save_env() {
     tmp="$ENV_FILE.$$"
     {
         echo "# tsmanager.sh 自动生成的配置文件"
+        echo "# 只保存与默认值不同的配置项。自动推导的 CDN 地址和 checksum 不写入。"
         printf 'DATA_DIR=%s\n' "$(quote_env "$DATA_DIR")"
         printf 'TMP_DIR=%s\n' "$(quote_env "$TMP_DIR")"
         printf 'STATEDIR=%s\n' "$(quote_env "$STATEDIR")"
         printf 'CONFIG=%s\n' "$(quote_env "$CONFIG")"
-        printf 'CDN_BASE=%s\n' "$(quote_env "$CDN_BASE")"
-        printf 'TARGET=%s\n' "$(quote_env "$TARGET")"
         printf 'TS_PACKAGE_URL=%s\n' "$(quote_env "$PACKAGE_URL")"
-        printf 'TS_CHECKSUM_URL=%s\n' "$(quote_env "$CHECKSUM_URL")"
         printf 'MIN_DATA_FREE_KB=%s\n' "$(quote_env "$MIN_DATA_FREE_KB")"
         printf 'MIN_TMP_FREE_KB=%s\n' "$(quote_env "$MIN_TMP_FREE_KB")"
         printf 'TAILSCALED_ARGS=%s\n' "$(quote_env "$TAILSCALED_ARGS")"
@@ -163,7 +161,7 @@ detect_target() {
     os=$(uname -s 2>/dev/null || printf unknown)
     case "$os" in
         Linux|linux) ;;
-        *) fail "当前系统不是 Linux，无法自动选择 tailscale-small 包；请设置 TARGET 或 TS_PACKAGE_URL/TS_CHECKSUM_URL" ;;
+        *) fail "当前系统不是 Linux，无法自动选择 tailscale-small 包；请设置 TARGET 或 TS_PACKAGE_URL" ;;
     esac
 
     arch=$(cpu_arch)
@@ -187,7 +185,7 @@ detect_target() {
         mips) printf 'linux-mips-softfloat\n' ;;
         mips64el|mips64le) printf 'linux-mips64le-softfloat\n' ;;
         riscv64) printf 'linux-riscv64\n' ;;
-        *) fail "不支持或无法识别的 CPU 架构：$arch；请设置 TARGET 或 TS_PACKAGE_URL/TS_CHECKSUM_URL" ;;
+        *) fail "不支持或无法识别的 CPU 架构：$arch；请设置 TARGET 或 TS_PACKAGE_URL" ;;
     esac
 }
 
@@ -197,14 +195,10 @@ effective_package_url() {
         return 0
     fi
     target=$(detect_target)
-    printf '%s/tailscale-small_latest_%s.tar.gz\n' "$CDN_BASE" "$target"
+    printf '%s/tailscale-small_latest_%s.tar.gz\n' "$CDN_LATEST" "$target"
 }
 
 effective_checksum_url() {
-    if [ -n "$CHECKSUM_URL" ]; then
-        printf '%s\n' "$CHECKSUM_URL"
-        return 0
-    fi
     printf '%s.sha256\n' "$(effective_package_url)"
 }
 
@@ -224,8 +218,6 @@ ask_value() {
         STATEDIR) STATEDIR=$ans ;;
         CONFIG) CONFIG=$ans ;;
         PACKAGE_URL) PACKAGE_URL=$ans ;;
-        CHECKSUM_URL) CHECKSUM_URL=$ans ;;
-        TARGET) TARGET=$ans ;;
         *) fail "内部错误：不支持的配置项 $name" ;;
     esac
 }
@@ -233,17 +225,18 @@ ask_value() {
 configure_interactive() {
     make_base_dirs
     echo "首次配置 Tailscale，直接回车使用默认值。" >&2
-    default_target=${TARGET:-}
-    if [ -z "$default_target" ]; then
+    default_package=${PACKAGE_URL:-}
+    if [ -z "$default_package" ]; then
         default_target=$(detect_target)
+        default_package=$CDN_LATEST/tailscale-small_latest_${default_target}.tar.gz
     fi
-    default_package=${PACKAGE_URL:-$CDN_BASE/tailscale-small_latest_${default_target}.tar.gz}
-    default_checksum=${CHECKSUM_URL:-$default_package.sha256}
     ask_value STATEDIR "状态目录 statedir（小文件，建议放 /data）" "$STATEDIR"
     ask_value CONFIG "配置文件 config（可留空；非空时会传给 tailscaled --config）" "$CONFIG"
-    ask_value TARGET "包架构 target" "$default_target"
-    ask_value PACKAGE_URL "压缩包下载地址" "$default_package"
-    ask_value CHECKSUM_URL "SHA256 校验文件下载地址" "$default_checksum"
+    echo "下载地址及 checksum 说明：" >&2
+    echo "  留空 = 自动检测 Linux CPU 架构，从 jsDelivr CDN 下载" >&2
+    echo "  填入地址 = 绑定自定义源（checksum 自动从地址 + .sha256 推导）" >&2
+    echo "  示例：$default_package" >&2
+    ask_value PACKAGE_URL "下载地址" "$default_package"
     save_env
 }
 
@@ -540,7 +533,6 @@ write_cron() {
     log "定时任务已写入"
 }
 
-
 remove_cron() {
     target=$(cron_target 2>/dev/null || true)
     if [ -z "$target" ]; then
@@ -613,11 +605,10 @@ status() {
     printf '状态目录 STATEDIR=%s\n' "$STATEDIR"
     printf '配置文件 CONFIG=%s\n' "$CONFIG"
     printf 'socket=%s\n' "$SOCKET"
-    printf 'CDN_BASE=%s\n' "$CDN_BASE"
     if target=$(detect_target 2>/dev/null); then
-        printf '目标架构 TARGET=%s\n' "$target"
+        printf '目标架构=%s\n' "$target"
     else
-        printf '目标架构 TARGET=unknown\n'
+        printf '目标架构=unknown\n'
     fi
     printf '压缩包 URL=%s\n' "$(effective_package_url 2>/dev/null || printf 'unknown')"
     printf '校验文件 URL=%s\n' "$(effective_checksum_url 2>/dev/null || printf 'unknown')"
@@ -675,7 +666,6 @@ install_all() {
     install_package
     write_cron
 }
-
 
 yes_value() {
     case "$1" in
@@ -765,26 +755,21 @@ usage() {
   cron       自动把定时任务写入系统 crontab，重复执行幂等
   help       显示此帮助
 
-默认下载：
-  自动检测 Linux CPU 架构，并从 jsDelivr CDN 下载两个文件：
-  1) tailscale-small_latest_<target>.tar.gz
-  2) tailscale-small_latest_<target>.tar.gz.sha256
+下载方式：
+  留空 = 自动检测本机 Linux CPU 架构，从 jsDelivr CDN 下载两个文件：
+    1) tailscale-small_latest_<target>.tar.gz
+    2) tailscale-small_latest_<target>.tar.gz.sha256
   下载后必须通过 SHA256 校验才会解压安装。
 
-自定义下载：
-  在 .env 或环境变量中同时设置：
-  TS_PACKAGE_URL=https://example/tailscale-small_xxx.tar.gz
-  TS_CHECKSUM_URL=https://example/tailscale-small_xxx.tar.gz.sha256
+  自定义 = 设置一个下载地址即可。checksum 文件只需放在同路径的 <地址>.sha256：
+    TS_PACKAGE_URL=https://example.com/tailscale-small_xxx.tar.gz
 
-.env 配置项：
+.env 配置项（只保存用户显式配置，自动推导项不写入）：
   DATA_DIR=/data/tailscale
   TMP_DIR=/tmp/tailscale
   STATEDIR=/data/tailscale/state
   CONFIG=                 # 可留空；非空时传给 tailscaled --config
-  CDN_BASE=https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest
-  TARGET=                 # 可留空自动检测；或 linux-arm64/linux-arm-v7 等
-  TS_PACKAGE_URL=         # 可留空使用 CDN + TARGET 默认值
-  TS_CHECKSUM_URL=        # 可留空使用 TS_PACKAGE_URL.sha256
+  TS_PACKAGE_URL=         # 可留空使用 CDN 默认值
   MIN_DATA_FREE_KB=64
   MIN_TMP_FREE_KB=8192
   TAILSCALED_ARGS='--tun=tailscale0'

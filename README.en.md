@@ -125,17 +125,15 @@ If the device cannot access jsDelivr, use GitHub Releases or a LAN HTTP URL inst
 
 `install` performs three actions:
 
-- Prompts for settings and writes `/data/tailscale/.env`
-- Downloads the archive and matching `.sha256` file, verifies integrity, then installs the binary into `/tmp/tailscale`
+- Prompts for settings and writes `/data/tailscale/.env` (only user-specified values are saved; .env stays minimal)
+- Downloads the archive, verifies `.sha256`, then installs the binary into `/tmp/tailscale`
 - Automatically installs the cron self-healing task
 
-The script asks for:
+The script asks just 3 questions:
 
 - `statedir`, default `/data/tailscale/state`
 - `config`, optional and can be empty
-- package `target`, auto-detected by default
-- archive download URL
-- SHA256 checksum file URL
+- download URL; leave empty to auto-detect the current Linux CPU architecture and use jsDelivr CDN
 
 The default download URLs are generated from the detected target, for example arm64:
 
@@ -164,15 +162,12 @@ Or use an auth key:
 
 ## Custom download source
 
-If you do not use the default CDN, provide two URLs: the archive and the checksum. You can write them to `.env` or pass them as environment variables.
+Only one URL is needed; the checksum file must be at `<url>.sha256`. You can write it to `.env` or pass it as an environment variable.
 
 ```sh
 TS_PACKAGE_URL='https://example.com/tailscale-small_v1.88.0_linux-arm64.tar.gz' \
-TS_CHECKSUM_URL='https://example.com/tailscale-small_v1.88.0_linux-arm64.tar.gz.sha256' \
 /data/tailscale/tsmanager.sh install
 ```
-
-Providing only a custom archive URL without a checksum URL is not recommended. The script defaults to `TS_PACKAGE_URL + .sha256`, so your custom source should provide that file too.
 
 ## Manager commands
 

@@ -125,17 +125,15 @@ chmod +x tsmanager.sh
 
 `install` 会完成三件事：
 
-- 交互询问并写入 `/data/tailscale/.env`
-- 下载压缩包和对应 `.sha256` 文件，校验通过后安装二进制到 `/tmp/tailscale`
+- 交互询问并写入 `/data/tailscale/.env`（只保存用户显式配置，.env 极为精简）
+- 下载压缩包，校验 `.sha256`，通过后安装二进制到 `/tmp/tailscale`
 - 自动写入 cron 定时自愈任务
 
-脚本会询问：
+脚本只问 3 个问题：
 
 - 状态目录 `statedir`，默认 `/data/tailscale/state`
 - 配置文件 `config`，可留空
-- 包架构 `target`，默认自动检测
-- 压缩包下载地址
-- SHA256 校验文件下载地址
+- 下载地址，留空则自动检测本机 Linux CPU 架构从 jsDelivr CDN 下载
 
 默认下载地址会自动按架构生成，例如 arm64：
 
@@ -164,15 +162,12 @@ https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_
 
 ## 自定义下载源
 
-如果不用默认 CDN，需要同时提供两个 URL：压缩包和 checksum。可以写入 `.env`，也可以临时通过环境变量传入。
+只需设置一个下载地址，checksum 文件放在同路径的 `<地址>.sha256`。可以写入 `.env`，也可以临时通过环境变量传入。
 
 ```sh
 TS_PACKAGE_URL='https://example.com/tailscale-small_v1.88.0_linux-arm64.tar.gz' \
-TS_CHECKSUM_URL='https://example.com/tailscale-small_v1.88.0_linux-arm64.tar.gz.sha256' \
 /data/tailscale/tsmanager.sh install
 ```
-
-只自定义压缩包而不提供 checksum 不推荐。脚本会默认把 checksum URL 推导为 `TS_PACKAGE_URL + .sha256`，因此你的自定义源也应该提供这个文件。
 
 ## 管理脚本命令
 
