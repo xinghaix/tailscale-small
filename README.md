@@ -16,6 +16,8 @@
 - 尝试使用 UPX 进一步压缩；UPX 不支持的架构会保留 Go 已 strip 的极简二进制
 - 每个压缩包只包含：`tailscale` 和 `tailscaled`
 - 提供 BusyBox/POSIX sh 兼容的 `tsmanager.sh`
+- `tsmanager.sh` 默认自动检测当前 Linux CPU 架构，从 jsDelivr CDN 下载匹配的压缩包和 `.sha256` 校验文件
+- 下载后必须通过 SHA256 完整性校验才会解压安装
 - 支持 GitHub Releases 和 jsDelivr CDN 下载
 
 ## 为什么做这个
@@ -36,6 +38,8 @@
 - `linux/mips` softfloat
 - `linux/mips64le` softfloat
 - `linux/riscv64`
+
+`tsmanager.sh` 会根据 `uname -m` 和必要时的 `/proc/cpuinfo` 自动映射到上面的 target。自动识别失败时，可以手动设置 `TARGET`。
 
 ## 包内容
 
@@ -58,10 +62,13 @@ tailscaled -> tailscale
 
 ### GitHub Releases
 
+Release tag 命名直接跟随官方 Tailscale tag，不额外添加 `-small` 后缀。
+
 版本化下载示例：
 
 ```text
 https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0/tailscale-small_v1.88.0_linux-arm64.tar.gz
+https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0/tailscale-small_v1.88.0_linux-arm64.tar.gz.sha256
 https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0/tsmanager.sh
 ```
 
@@ -74,6 +81,7 @@ jsDelivr 不能直接加速 GitHub Release assets，所以本项目的 workflow 
 ```text
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tsmanager.sh
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_latest_linux-arm64.tar.gz
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_latest_linux-arm64.tar.gz.sha256
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/SHA256SUMS
 ```
 
@@ -82,6 +90,7 @@ https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/SHA256SUMS
 ```text
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0/tsmanager.sh
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0/tailscale-small_v1.88.0_linux-arm64.tar.gz
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0/tailscale-small_v1.88.0_linux-arm64.tar.gz.sha256
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0/SHA256SUMS
 ```
 
@@ -117,19 +126,22 @@ chmod +x tsmanager.sh
 `install` 会完成三件事：
 
 - 交互询问并写入 `/data/tailscale/.env`
-- 下载并安装二进制到 `/tmp/tailscale`
+- 下载压缩包和对应 `.sha256` 文件，校验通过后安装二进制到 `/tmp/tailscale`
 - 自动写入 cron 定时自愈任务
 
 脚本会询问：
 
 - 状态目录 `statedir`，默认 `/data/tailscale/state`
 - 配置文件 `config`，可留空
-- 下载地址，例如 jsDelivr、GitHub Release URL 或你的局域网 HTTP URL
+- 包架构 `target`，默认自动检测
+- 压缩包下载地址
+- SHA256 校验文件下载地址
 
-下载地址示例：
+默认下载地址会自动按架构生成，例如 arm64：
 
 ```text
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_latest_linux-arm64.tar.gz
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_latest_linux-arm64.tar.gz.sha256
 ```
 
 3. 启动：
@@ -150,21 +162,33 @@ https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_
 /tmp/tailscale/tailscale --socket=/var/run/tailscale/tailscaled.sock up --auth-key=tskey-... --hostname=router
 ```
 
+## 自定义下载源
+
+如果不用默认 CDN，需要同时提供两个 URL：压缩包和 checksum。可以写入 `.env`，也可以临时通过环境变量传入。
+
+```sh
+TS_PACKAGE_URL='https://example.com/tailscale-small_v1.88.0_linux-arm64.tar.gz' \
+TS_CHECKSUM_URL='https://example.com/tailscale-small_v1.88.0_linux-arm64.tar.gz.sha256' \
+/data/tailscale/tsmanager.sh install
+```
+
+只自定义压缩包而不提供 checksum 不推荐。脚本会默认把 checksum URL 推导为 `TS_PACKAGE_URL + .sha256`，因此你的自定义源也应该提供这个文件。
+
 ## 管理脚本命令
 
 所有命令都按幂等方式设计，可以重复执行。
 
 ```text
-install    首次配置 + 安装二进制 + 自动写入 cron，重复执行幂等
+install    首次配置 + 下载校验 + 安装二进制 + 自动写入 cron，重复执行幂等
 init       兼容旧命令，等同于 install
 config     兼容旧命令，等同于 install
 configure  兼容旧命令，等同于 install
-update     重新下载/安装并刷新 cron
-start      启动 tailscaled；如果二进制缺失会先安装
+update     重新下载/校验/安装并刷新 cron，然后启动 tailscaled
+start      启动 tailscaled；如果二进制缺失会先下载校验并安装
 stop       停止 tailscaled；未运行也返回成功
 restart    重启 tailscaled
-status     查看配置、文件、进程、空间和 cron 状态
-ensure     cron 使用：文件缺失则安装，进程缺失则启动
+status     查看配置、文件、进程、空间、cron 和下载 URL
+ensure     cron 使用：从 .env/默认配置读取，必要时安装并启动，幂等
 cron       自动写入或更新定时任务，重复执行不会重复追加
 help       显示帮助
 ```
@@ -198,10 +222,18 @@ socket 固定为：
 /data/tailscale/tsmanager.sh cron
 ```
 
-cron 每 5 分钟执行一次 `ensure`：
+cron 每 5 分钟执行一次 `ensure`，它会执行完整的 install + start 自愈流程：
 
-- `/tmp` 里的二进制缺失时，重新下载并安装
-- `tailscaled` 进程不存在时，重新启动
+- 从 `.env` 和默认配置读取下载源、架构、状态目录等配置
+- `/tmp` 里的二进制缺失时，下载压缩包和 `.sha256` 并校验安装
+- `tailscaled` 进程不存在时，启动它
+- 已安装且已运行时直接跳过，保持幂等
+
+默认 `UPDATE_ON_ENSURE=0`，所以 cron 不会每 5 分钟重复下载。若你希望 cron 每次都重新校验和更新，可以在 `.env` 中设置：
+
+```sh
+UPDATE_ON_ENSURE=1
+```
 
 ## 本地构建
 
