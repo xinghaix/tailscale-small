@@ -28,8 +28,10 @@
 
 set -eu
 
-CDN_BASE=https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn
+DEFAULT_CDN_BASE=https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn
+CDN_BASE=$DEFAULT_CDN_BASE
 GITHUB_API=https://api.github.com/repos/xinghaix/tailscale-small/releases
+CONFIG_NORMALIZED=0
 
 SCRIPT_NAME=tsmanager.sh
 DATA_DIR=${DATA_DIR:-/data/tailscale}
@@ -41,6 +43,7 @@ fi
 
 DATA_DIR=${DATA_DIR:-/data/tailscale}
 ENV_FILE=${ENV_FILE:-$DATA_DIR/.env}
+CDN_BASE=$DEFAULT_CDN_BASE
 TMP_DIR=${TMP_DIR:-/tmp/tailscale}
 RUN_DIR=${RUN_DIR:-}
 SOCKET=${SOCKET:-}
@@ -81,6 +84,23 @@ fail() {
 have() {
     command -v "$1" >/dev/null 2>&1
 }
+
+normalize_legacy_config() {
+    # 旧版 .env 可能保存过 CDN_BASE=...@cdn/latest，或保存了由它生成的
+    # PACKAGE_URL=...@cdn/latest/latest/...。CDN_BASE 现在是脚本内部常量，
+    # 这里强制恢复并修正旧 URL，避免重复 latest 导致 404。
+    CDN_BASE=$DEFAULT_CDN_BASE
+    case "$PACKAGE_URL" in
+        *'cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/latest/tailscale-small_latest_'*.tar.gz)
+            old_package_url=$PACKAGE_URL
+            PACKAGE_URL=$(printf '%s\n' "$PACKAGE_URL" | sed 's#@cdn/latest/latest/#@cdn/latest/#g')
+            CONFIG_NORMALIZED=1
+            log "修正旧版下载地址：$old_package_url -> $PACKAGE_URL"
+            ;;
+    esac
+}
+
+normalize_legacy_config
 
 make_base_dirs() {
     mkdir -p "$DATA_DIR" "$TMP_DIR" "$STATEDIR"
@@ -719,6 +739,10 @@ status() {
 ensure_config() {
     mode=${1:-auto}
     if [ -f "$ENV_FILE" ]; then
+        if [ "$CONFIG_NORMALIZED" = 1 ]; then
+            save_env
+            CONFIG_NORMALIZED=0
+        fi
         return 0
     fi
     if [ "$mode" = interactive ] && [ -t 0 ]; then
