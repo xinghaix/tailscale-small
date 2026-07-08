@@ -121,11 +121,12 @@ If the device cannot access jsDelivr, use GitHub Releases or a LAN HTTP URL inst
 /data/tailscale/tsmanager.sh install
 ```
 
-`install` performs three actions:
+`install` performs four actions:
 
 - Prompts for settings and writes `/data/tailscale/.env` (only user-specified values are saved; .env stays minimal)
 - Downloads the `.tar.gz` archive and installs the binary into `/tmp/tailscale`
 - Automatically installs the cron self-healing task
+- Automatically starts `tailscaled`
 
 The script asks just 4 questions:
 
@@ -172,7 +173,7 @@ PACKAGE_URL='https://example.com/tailscale-small_v1.100.0_linux-arm64.tar.gz' \
 All commands are designed to be idempotent and safe to run repeatedly.
 
 ```text
-install    first-run config + download/install binary + automatic cron setup
+install    first-run config + download/install binary + automatic cron setup + automatic start
 update     download/install again, refresh cron, then start tailscaled
 start      start tailscaled; download/install first if runtime files are missing
 stop       stop tailscaled; succeeds even if it is not running
@@ -242,6 +243,8 @@ Cron runs `ensure` every 5 minutes. It performs the full install + start self-he
 - If the binary in `/tmp` is missing, downloads the `.tar.gz` archive and installs it
 - If the `tailscaled` process is missing, starts it
 - If already installed and running, skips work and remains idempotent
+
+That means both `install` and `ensure` now carry `start` semantics: if files are missing they reinstall, and if the daemon is not running they bring `tailscaled` up.
 
 By default `UPDATE_ON_ENSURE=0`, so cron does not download every 5 minutes. To force download/install every cron run, set this in `.env`:
 

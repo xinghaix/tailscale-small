@@ -780,12 +780,14 @@ install_all() {
     ensure_config interactive
     install_package
     write_cron
+    start_tailscaled
 }
 
 install_batch() {
     ensure_config batch
     install_package
     write_cron
+    start_tailscaled
 }
 
 # ──────────────────────────── 卸载 ─────────────────────────────────────

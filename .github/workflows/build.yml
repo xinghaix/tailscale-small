@@ -171,7 +171,34 @@ jobs:
           git add .
           if git diff --cached --quiet; then
             echo "CDN branch already up to date"
-            exit 0
+          else
+            git commit -m "Publish ${RELEASE_TAG} CDN files"
+            git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:cdn
           fi
-          git commit -m "Publish ${RELEASE_TAG} CDN files"
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:cdn
+      - name: Purge jsDelivr CDN cache
+        env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+          TAILSCALE_REF: ${{ needs.resolve.outputs.tailscale_ref }}
+        run: |
+          set -euo pipefail
+          # jsDelivr 边缘缓存最长 12h；push 之后主动 purge，让路由器立即拿到最新文件，
+          # 而不是等下一个 cron 周期碰到旧缓存。
+          base="https://purge.jsdelivr.net/gh/xinghaix/tailscale-small@cdn"
+          targets="$RELEASE_TAG/tsmanager.sh latest/tsmanager.sh"
+          # 版本目录：所有架构 tar.gz
+          for f in "$GITHUB_WORKSPACE"/release-files/tailscale-small_${TAILSCALE_REF}_*.tar.gz; do
+            targets="$targets $RELEASE_TAG/$(basename "$f")"
+          done
+          # latest 目录：所有 latest tar.gz
+          for f in "$GITHUB_WORKSPACE"/release-files/tailscale-small_${TAILSCALE_REF}_*.tar.gz; do
+            b=$(basename "$f")
+            latest=${b/$TAILSCALE_REF/latest}
+            targets="$targets latest/$latest"
+          done
+          for t in $targets; do
+            url="$base/$t"
+            echo "purging $url"
+            curl -fsS --retry 2 --retry-delay 3 --max-time 30 "$url" -o /dev/null || \
+              echo "::warning::jsDelivr purge failed: $url"
+          done
+          echo "jsDelivr CDN purge done"
