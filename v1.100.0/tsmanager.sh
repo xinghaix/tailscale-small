@@ -32,8 +32,21 @@ DEFAULT_CDN_BASE=https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn
 CDN_BASE=$DEFAULT_CDN_BASE
 GITHUB_API=https://api.github.com/repos/xinghaix/tailscale-small/releases
 CONFIG_NORMALIZED=0
+SCRIPT_ENV_SCHEMA_VERSION=2
+LOCK_HELD=0
 
 SCRIPT_NAME=tsmanager.sh
+USER_BOOT_BACKEND_SET=${BOOT_BACKEND+x}
+USER_BOOT_BACKEND_VALUE=${BOOT_BACKEND:-}
+USER_SERVICE_ROOT_SET=${SERVICE_ROOT+x}
+USER_SERVICE_ROOT_VALUE=${SERVICE_ROOT:-}
+USER_CRON_FILE_SET=${CRON_FILE+x}
+USER_CRON_FILE_VALUE=${CRON_FILE:-}
+USER_PACKAGE_URL_SET=${PACKAGE_URL+x}
+USER_PACKAGE_URL_VALUE=${PACKAGE_URL:-}
+USER_TS_HOSTNAME_SET=${TS_HOSTNAME+x}
+USER_TS_HOSTNAME_VALUE=${TS_HOSTNAME:-}
+
 DATA_DIR=${DATA_DIR:-/data/tailscale}
 ENV_FILE=${ENV_FILE:-$DATA_DIR/.env}
 if [ -f "$ENV_FILE" ]; then
@@ -62,10 +75,33 @@ LOGFILE=${LOGFILE:-$TMP_DIR/tailscaled.log}
 TARGET=${TARGET:-}
 PACKAGE_URL=${PACKAGE_URL:-}
 VERSION=${VERSION:-latest}
+ENV_SCHEMA_VERSION=${ENV_SCHEMA_VERSION:-$SCRIPT_ENV_SCHEMA_VERSION}
 MIN_DATA_FREE_KB=${MIN_DATA_FREE_KB:-64}
 MIN_TMP_FREE_KB=${MIN_TMP_FREE_KB:-8192}
 TAILSCALED_ARGS=${TAILSCALED_ARGS:---tun=tailscale0}
 UPDATE_ON_ENSURE=${UPDATE_ON_ENSURE:-0}
+START_FAIL_LIMIT=${START_FAIL_LIMIT:-3}
+START_FAIL_WINDOW=${START_FAIL_WINDOW:-600}
+MANAGER_LOG=${MANAGER_LOG:-$TMP_DIR/manager.log}
+LOCKDIR=${LOCKDIR:-$TMP_DIR/tsmanager.lock}
+LOCKPIDFILE=${LOCKPIDFILE:-$LOCKDIR/pid}
+FAILLOG=${FAILLOG:-$TMP_DIR/start.fail}
+ERROR_FILE=${ERROR_FILE:-$TMP_DIR/start.error}
+BOOT_BACKEND=${BOOT_BACKEND:-auto}
+SERVICE_NAME=${SERVICE_NAME:-tailscale-small}
+SERVICE_ROOT=${SERVICE_ROOT:-}
+TS_HOSTNAME=${TS_HOSTNAME:-}
+ADVERTISE_ROUTES=${ADVERTISE_ROUTES:-}
+ACCEPT_DNS=${ACCEPT_DNS:-}
+ACCEPT_ROUTES=${ACCEPT_ROUTES:-}
+EXIT_NODE=${EXIT_NODE:-}
+PERSIST_AUTH_KEY=${PERSIST_AUTH_KEY:-0}
+AUTH_KEY=${AUTH_KEY:-}
+if [ "${USER_BOOT_BACKEND_SET:-}" = x ]; then BOOT_BACKEND=$USER_BOOT_BACKEND_VALUE; fi
+if [ "${USER_SERVICE_ROOT_SET:-}" = x ]; then SERVICE_ROOT=$USER_SERVICE_ROOT_VALUE; fi
+if [ "${USER_CRON_FILE_SET:-}" = x ]; then CRON_FILE=$USER_CRON_FILE_VALUE; fi
+if [ "${USER_PACKAGE_URL_SET:-}" = x ]; then PACKAGE_URL=$USER_PACKAGE_URL_VALUE; fi
+if [ "${USER_TS_HOSTNAME_SET:-}" = x ]; then TS_HOSTNAME=$USER_TS_HOSTNAME_VALUE; fi
 
 CRON_BEGIN='# BEGIN tsmanager.sh'
 CRON_END='# END tsmanager.sh'
@@ -90,6 +126,24 @@ normalize_legacy_config() {
     # PACKAGE_URL=...@cdn/latest/latest/...。CDN_BASE 现在是脚本内部常量，
     # 这里强制恢复并修正旧 URL，避免重复 latest 导致 404。
     CDN_BASE=$DEFAULT_CDN_BASE
+    if [ "$ENV_SCHEMA_VERSION" != "$SCRIPT_ENV_SCHEMA_VERSION" ]; then
+        ENV_SCHEMA_VERSION=$SCRIPT_ENV_SCHEMA_VERSION
+        CONFIG_NORMALIZED=1
+    fi
+    if [ -z "$PACKAGE_URL" ] && [ -n "${TS_PACKAGE_URL:-}" ]; then
+        PACKAGE_URL=$TS_PACKAGE_URL
+        CONFIG_NORMALIZED=1
+        log "迁移旧版配置：TS_PACKAGE_URL -> PACKAGE_URL"
+    fi
+    if [ -n "${TS_CHECKSUM_URL:-}" ]; then
+        CONFIG_NORMALIZED=1
+        log "忽略旧版校验配置：TS_CHECKSUM_URL"
+    fi
+    case "${CDN_BASE:-}" in
+        *'@cdn/latest')
+            CONFIG_NORMALIZED=1
+            ;;
+    esac
     case "$PACKAGE_URL" in
         *'cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/latest/tailscale-small_latest_'*.tar.gz)
             old_package_url=$PACKAGE_URL
@@ -126,6 +180,100 @@ check_space() {
     fi
 }
 
+now_epoch() {
+    date '+%s' 2>/dev/null || printf '0\n'
+}
+
+prune_start_failures() {
+    [ -f "$FAILLOG" ] || return 0
+    now=$(now_epoch)
+    cutoff=$((now - START_FAIL_WINDOW))
+    awk -F '\t' -v cutoff="$cutoff" '$1 ~ /^[0-9]+$/ && $1 >= cutoff {print}' "$FAILLOG" >"$FAILLOG.new" 2>/dev/null || :
+    mv "$FAILLOG.new" "$FAILLOG"
+}
+
+record_start_failure() {
+    reason=$1
+    mkdir -p "$TMP_DIR"
+    ts=$(now_epoch)
+    {
+        [ -f "$FAILLOG" ] && cat "$FAILLOG"
+        printf '%s\t%s\n' "$ts" "$reason"
+    } >"$FAILLOG.new"
+    mv "$FAILLOG.new" "$FAILLOG"
+    prune_start_failures
+    count=$(wc -l <"$FAILLOG" | tr -d ' ')
+    if [ "$count" -ge "$START_FAIL_LIMIT" ]; then
+        {
+            printf 'time=%s\n' "$ts"
+            printf 'count=%s\n' "$count"
+            printf 'window=%s\n' "$START_FAIL_WINDOW"
+            printf 'reason=%s\n' "$reason"
+        } >"$ERROR_FILE"
+        log "tailscaled 启动连续失败 ${count} 次，已进入熔断；请修复后执行 clear-error"
+    fi
+}
+
+clear_start_state() {
+    rm -f "$FAILLOG" "$ERROR_FILE"
+}
+
+start_error_active() {
+    [ -f "$ERROR_FILE" ]
+}
+
+pid_matches_daemon() {
+    pid=$1
+    [ -n "$pid" ] || return 1
+    ps 2>/dev/null | awk -v pid="$pid" '$1 == pid && $0 ~ /tailscale|tailscaled/ {found=1} END {exit !found}'
+}
+
+acquire_lock() {
+    make_base_dirs
+    if mkdir "$LOCKDIR" 2>/dev/null; then
+        printf '%s\n' "$$" >"$LOCKPIDFILE"
+        LOCK_HELD=1
+        return 0
+    fi
+
+    stale_pid=''
+    if [ -f "$LOCKPIDFILE" ]; then
+        stale_pid=$(cat "$LOCKPIDFILE" 2>/dev/null || true)
+    fi
+    if [ -n "$stale_pid" ] && ! pid_alive "$stale_pid"; then
+        rm -f "$LOCKPIDFILE"
+        rmdir "$LOCKDIR" 2>/dev/null || true
+    elif [ -z "$stale_pid" ]; then
+        rmdir "$LOCKDIR" 2>/dev/null || true
+    fi
+
+    if mkdir "$LOCKDIR" 2>/dev/null; then
+        printf '%s\n' "$$" >"$LOCKPIDFILE"
+        LOCK_HELD=1
+        return 0
+    fi
+
+    fail "已有另一个 tsmanager.sh 实例在运行；如确认异常中断，请删除锁目录：$LOCKDIR"
+}
+
+release_lock() {
+    if [ "$LOCK_HELD" = 1 ]; then
+        rm -f "$LOCKPIDFILE"
+        rmdir "$LOCKDIR" 2>/dev/null || true
+        LOCK_HELD=0
+    fi
+}
+
+run_locked() {
+    acquire_lock
+    trap 'release_lock' EXIT INT TERM
+    "$@"
+    rc=$?
+    trap - EXIT INT TERM
+    release_lock
+    return "$rc"
+}
+
 # ──────────────────────────── .env 持久化 ──────────────────────────────
 
 quote_env() {
@@ -140,6 +288,7 @@ save_env() {
     tmp="$ENV_FILE.$$"
     {
         echo "# tsmanager.sh 自动生成的配置文件"
+        printf 'ENV_SCHEMA_VERSION=%s\n' "$(quote_env "$SCRIPT_ENV_SCHEMA_VERSION")"
         printf 'DATA_DIR=%s\n' "$(quote_env "$DATA_DIR")"
         printf 'TMP_DIR=%s\n' "$(quote_env "$TMP_DIR")"
         printf 'STATEDIR=%s\n' "$(quote_env "$STATEDIR")"
@@ -150,6 +299,16 @@ save_env() {
         printf 'MIN_TMP_FREE_KB=%s\n' "$(quote_env "$MIN_TMP_FREE_KB")"
         printf 'TAILSCALED_ARGS=%s\n' "$(quote_env "$TAILSCALED_ARGS")"
         printf 'UPDATE_ON_ENSURE=%s\n' "$(quote_env "$UPDATE_ON_ENSURE")"
+        printf 'BOOT_BACKEND=%s\n' "$(quote_env "$BOOT_BACKEND")"
+        printf 'TS_HOSTNAME=%s\n' "$(quote_env "$TS_HOSTNAME")"
+        printf 'ADVERTISE_ROUTES=%s\n' "$(quote_env "$ADVERTISE_ROUTES")"
+        printf 'ACCEPT_DNS=%s\n' "$(quote_env "$ACCEPT_DNS")"
+        printf 'ACCEPT_ROUTES=%s\n' "$(quote_env "$ACCEPT_ROUTES")"
+        printf 'EXIT_NODE=%s\n' "$(quote_env "$EXIT_NODE")"
+        if [ "$PERSIST_AUTH_KEY" = 1 ] && [ -n "$AUTH_KEY" ]; then
+            printf 'AUTH_KEY=%s\n' "$(quote_env "$AUTH_KEY")"
+            printf 'PERSIST_AUTH_KEY=%s\n' "$(quote_env "$PERSIST_AUTH_KEY")"
+        fi
     } >"$tmp"
     chmod 0600 "$tmp" 2>/dev/null || true
 
@@ -494,6 +653,11 @@ start_tailscaled() {
     make_run_dir
     files_ok || install_package
 
+    if start_error_active; then
+        tail -n 20 "$ERROR_FILE" 2>/dev/null || true
+        fail "检测到启动熔断；请修复问题后执行 clear-error"
+    fi
+
     if is_running; then
         log "tailscaled 已运行，pid $(find_pid)"
         return 0
@@ -501,21 +665,31 @@ start_tailscaled() {
 
     rm -f "$SOCKET"
     log "启动 tailscaled"
+    set -- "$DAEMON" "--statedir=$STATEDIR" "--socket=$SOCKET"
     if [ -n "$CONFIG" ]; then
-        # shellcheck disable=SC2086
-        "$DAEMON" --statedir="$STATEDIR" --socket="$SOCKET" --config="$CONFIG" $TAILSCALED_ARGS >>"$LOGFILE" 2>&1 &
+        set -- "$@" "--config=$CONFIG"
+    fi
+    # shellcheck disable=SC2086
+    set -- "$@" $TAILSCALED_ARGS
+
+    if have setsid; then
+        setsid "$@" >>"$LOGFILE" 2>&1 </dev/null &
+    elif have nohup; then
+        nohup "$@" >>"$LOGFILE" 2>&1 </dev/null &
     else
-        # shellcheck disable=SC2086
-        "$DAEMON" --statedir="$STATEDIR" --socket="$SOCKET" $TAILSCALED_ARGS >>"$LOGFILE" 2>&1 &
+        "$@" >>"$LOGFILE" 2>&1 </dev/null &
     fi
     pid=$!
     printf '%s\n' "$pid" >"$PIDFILE"
     sleep 2
 
     if pid_alive "$pid"; then
+        pid_matches_daemon "$pid" || log "警告：进程已存活，但 ps 未识别为 tailscaled；继续视为启动成功"
+        clear_start_state
         log "tailscaled 已启动，pid $pid"
     else
         tail -n 40 "$LOGFILE" 2>/dev/null || true
+        record_start_failure "tailscaled 启动失败"
         fail "tailscaled 启动失败"
     fi
 }
@@ -546,6 +720,236 @@ stop_tailscaled() {
     log "tailscaled 已强制结束"
 }
 
+
+# ──────────────────────────── service / 自启动后端 ───────────────────────
+
+read_init_name() {
+    if [ -n "${FORCE_INIT:-}" ]; then
+        printf '%s\n' "$FORCE_INIT"
+    elif [ -r /proc/1/comm ]; then
+        cat /proc/1/comm 2>/dev/null
+    else
+        printf 'unknown\n'
+    fi
+}
+
+service_real_path() {
+    backend=$1
+    case "$backend" in
+        procd|openrc) path=/etc/init.d/$SERVICE_NAME ;;
+        systemd) path=/etc/systemd/system/$SERVICE_NAME.service ;;
+        *) path='' ;;
+    esac
+    if [ -n "$path" ] && [ -n "$SERVICE_ROOT" ]; then
+        printf '%s%s\n' "$SERVICE_ROOT" "$path"
+    else
+        printf '%s\n' "$path"
+    fi
+}
+
+detect_boot_backend() {
+    case "$BOOT_BACKEND" in
+        procd|systemd|openrc|cron|manual)
+            printf '%s\n' "$BOOT_BACKEND"
+            return 0
+            ;;
+    esac
+
+    init=$(read_init_name)
+    if [ -f /etc/rc.common ] && [ "$init" = procd ]; then
+        printf 'procd\n'
+    elif have systemctl && [ "$init" = systemd ]; then
+        printf 'systemd\n'
+    elif have rc-status && rc-status -r >/dev/null 2>&1; then
+        printf 'openrc\n'
+    else
+        printf 'cron\n'
+    fi
+}
+
+script_abs_path() {
+    case "$0" in
+        /*) printf '%s\n' "$0" ;;
+        */*) oldpwd=$(pwd 2>/dev/null || printf '.'); printf '%s/%s\n' "$oldpwd" "$0" ;;
+        *) printf '%s/%s\n' "$DATA_DIR" "$SCRIPT_NAME" ;;
+    esac
+}
+
+daemon_start_foreground() {
+    ensure_config auto
+    make_base_dirs
+    make_run_dir
+    files_ok || install_package
+    rm -f "$SOCKET"
+    set -- "$DAEMON" "--statedir=$STATEDIR" "--socket=$SOCKET"
+    if [ -n "$CONFIG" ]; then
+        set -- "$@" "--config=$CONFIG"
+    fi
+    # shellcheck disable=SC2086
+    set -- "$@" $TAILSCALED_ARGS
+    exec "$@"
+}
+
+write_procd_service() {
+    path=$(service_real_path procd)
+    [ -n "$path" ] || fail "无法确定 procd service 路径"
+    mkdir -p "$(dirname "$path")"
+    script=$(script_abs_path)
+    cat >"$path" <<EOF
+#!/bin/sh /etc/rc.common
+START=99
+USE_PROCD=1
+
+start_service() {
+    procd_open_instance
+    procd_set_param command "$script" daemon-start
+    procd_set_param respawn 3600 5 5
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance
+}
+
+stop_service() {
+    "$script" stop >/dev/null 2>&1 || true
+}
+EOF
+    chmod 0755 "$path" 2>/dev/null || true
+    log "procd service 已写入：$path"
+}
+
+write_systemd_service() {
+    path=$(service_real_path systemd)
+    [ -n "$path" ] || fail "无法确定 systemd service 路径"
+    mkdir -p "$(dirname "$path")"
+    script=$(script_abs_path)
+    cat >"$path" <<EOF
+[Unit]
+Description=tailscale-small runtime manager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=$script daemon-start
+ExecStop=$script stop
+Restart=on-failure
+RestartSec=10s
+LimitNOFILE=infinity
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    chmod 0644 "$path" 2>/dev/null || true
+    log "systemd service 已写入：$path"
+}
+
+write_openrc_service() {
+    path=$(service_real_path openrc)
+    [ -n "$path" ] || fail "无法确定 OpenRC service 路径"
+    mkdir -p "$(dirname "$path")"
+    script=$(script_abs_path)
+    cat >"$path" <<EOF
+#!/sbin/openrc-run
+name="$SERVICE_NAME"
+description="tailscale-small runtime manager"
+command="$script"
+command_args="daemon-start"
+command_background=false
+pidfile="$PIDFILE"
+
+supervisor=supervise-daemon
+respawn_delay=3
+respawn_max=0
+
+depend() {
+    after net
+}
+
+stop() {
+    ebegin "Stopping tailscale-small"
+    "$script" stop >/dev/null 2>&1 || true
+    eend $?
+}
+EOF
+    chmod 0755 "$path" 2>/dev/null || true
+    log "OpenRC service 已写入：$path"
+}
+
+service_install() {
+    ensure_config auto
+    backend=$(detect_boot_backend)
+    case "$backend" in
+        procd) write_procd_service ;;
+        systemd) write_systemd_service ;;
+        openrc) write_openrc_service ;;
+        cron) write_cron ;;
+        manual) log "BOOT_BACKEND=manual，跳过自启动安装" ;;
+        *) fail "不支持的 BOOT_BACKEND：$backend" ;;
+    esac
+}
+
+service_remove() {
+    backend=$(detect_boot_backend)
+    case "$backend" in
+        procd|systemd|openrc)
+            path=$(service_real_path "$backend")
+            rm -f "$path"
+            log "service 已移除：$path"
+            ;;
+        cron) remove_cron ;;
+        manual) log "BOOT_BACKEND=manual，无需移除 service" ;;
+    esac
+}
+
+enable_autostart() {
+    service_install
+    backend=$(detect_boot_backend)
+    if [ -n "$SERVICE_ROOT" ]; then
+        log "SERVICE_ROOT=$SERVICE_ROOT，仅写入 service 文件，跳过系统 enable 命令"
+        return 0
+    fi
+    case "$backend" in
+        procd) /etc/init.d/$SERVICE_NAME enable 2>/dev/null || write_cron ;;
+        systemd) systemctl daemon-reload 2>/dev/null || true; systemctl enable "$SERVICE_NAME.service" 2>/dev/null || write_cron ;;
+        openrc) rc-update add "$SERVICE_NAME" default 2>/dev/null || write_cron ;;
+        cron) write_cron ;;
+        manual) log "BOOT_BACKEND=manual，跳过 enable" ;;
+    esac
+}
+
+disable_autostart() {
+    backend=$(detect_boot_backend)
+    if [ -n "$SERVICE_ROOT" ]; then
+        service_remove
+        return 0
+    fi
+    case "$backend" in
+        procd) /etc/init.d/$SERVICE_NAME disable 2>/dev/null || true; service_remove ;;
+        systemd) systemctl disable "$SERVICE_NAME.service" 2>/dev/null || true; systemctl daemon-reload 2>/dev/null || true; service_remove ;;
+        openrc) rc-update del "$SERVICE_NAME" default 2>/dev/null || true; service_remove ;;
+        cron) remove_cron ;;
+        manual) log "BOOT_BACKEND=manual，跳过 disable" ;;
+    esac
+}
+
+boot_status() {
+    backend=$(detect_boot_backend)
+    printf 'boot_backend=%s\n' "$backend"
+    case "$backend" in
+        procd|systemd|openrc)
+            path=$(service_real_path "$backend")
+            printf 'service_file=%s\n' "$path"
+            [ -f "$path" ] && printf 'service_file_state=present\n' || printf 'service_file_state=missing\n'
+            ;;
+        cron)
+            cron_is_written && printf 'cron_state=present\n' || printf 'cron_state=missing\n'
+            ;;
+        manual)
+            printf 'autostart=manual\n'
+            ;;
+    esac
+}
+
 # ──────────────────────────── cron 管理 ────────────────────────────────
 
 cron_target() {
@@ -572,7 +976,7 @@ cron_block() {
     cat <<EOF
 $CRON_BEGIN
 # 每 5 分钟执行完整自愈流程：必要时安装 tailscale，然后启动 tailscaled。日志写到 /tmp，避免占用 /data。
-*/5 * * * * mkdir -p "$TMP_DIR" && DATA_DIR="$DATA_DIR" TMP_DIR="$TMP_DIR" "$DATA_DIR/$SCRIPT_NAME" ensure >>"$TMP_DIR/manager.log" 2>&1
+*/5 * * * * mkdir -p "$TMP_DIR" && DATA_DIR="$DATA_DIR" TMP_DIR="$TMP_DIR" "$DATA_DIR/$SCRIPT_NAME" ensure >>"$MANAGER_LOG" 2>&1
 $CRON_END
 EOF
 }
@@ -692,6 +1096,7 @@ status() {
     printf '持久目录 DATA_DIR=%s\n' "$DATA_DIR"
     printf '临时目录 TMP_DIR=%s\n' "$TMP_DIR"
     printf '环境文件 ENV_FILE=%s\n' "$ENV_FILE"
+    printf 'ENV_SCHEMA_VERSION=%s\n' "$ENV_SCHEMA_VERSION"
     printf '二进制 BIN=%s\n' "$BIN"
     printf 'daemon 入口 DAEMON=%s\n' "$DAEMON"
     printf '状态目录 STATEDIR=%s\n' "$STATEDIR"
@@ -718,16 +1123,42 @@ status() {
         printf '进程状态=未运行\n'
     fi
 
+    printf 'boot_backend=%s\n' "$(detect_boot_backend)"
     if cron_is_written; then
         printf '定时任务=已写入\n'
     else
         printf '定时任务=未写入\n'
     fi
 
+    if [ -d "$LOCKDIR" ]; then
+        printf 'lock_state=locked\n'
+    else
+        printf 'lock_state=unlocked\n'
+    fi
+
+    if start_error_active; then
+        printf 'error_state=tripped\n'
+        tail -n 20 "$ERROR_FILE" 2>/dev/null || true
+    else
+        printf 'error_state=clear\n'
+    fi
+
+    printf 'logfile=%s\n' "$LOGFILE"
+    printf 'manager_log=%s\n' "$MANAGER_LOG"
+
     data_kb=$(free_kb "$DATA_DIR" || printf 'unknown')
     tmp_kb=$(free_kb "$TMP_DIR" || printf 'unknown')
     printf 'data_free_kb=%s\n' "$data_kb"
     printf 'tmp_free_kb=%s\n' "$tmp_kb"
+
+    if [ -s "$LOGFILE" ]; then
+        printf '--- tailscaled.log (last 10) ---\n'
+        tail -n 10 "$LOGFILE" 2>/dev/null || true
+    fi
+    if [ -s "$MANAGER_LOG" ]; then
+        printf '--- manager.log (last 10) ---\n'
+        tail -n 10 "$MANAGER_LOG" 2>/dev/null || true
+    fi
 
     if [ -x "$CLI" ] && [ -S "$SOCKET" ]; then
         "$CLI" --socket="$SOCKET" status 2>/dev/null || true
@@ -779,15 +1210,149 @@ ensure_all() {
 install_all() {
     ensure_config interactive
     install_package
-    write_cron
+    enable_autostart
     start_tailscaled
 }
 
 install_batch() {
     ensure_config batch
     install_package
-    write_cron
+    enable_autostart
     start_tailscaled
+}
+
+update_all() {
+    ensure_config auto
+    stop_tailscaled
+    install_package
+    enable_autostart
+    start_tailscaled
+}
+
+restart_all() {
+    stop_tailscaled
+    start_tailscaled
+}
+
+cron_all() {
+    ensure_config auto
+    write_cron
+}
+
+clear_error_cmd() {
+    clear_start_state
+    log "已清理启动失败标记"
+}
+
+
+# ──────────────────────────── doctor / Tailscale 运维 ───────────────────
+
+detect_device_type() {
+    if [ -f /etc/openwrt_release ] || [ -f /etc/rc.common ]; then printf 'OpenWrt-like\n'
+    elif [ -f /etc/storage/started_script.sh ]; then printf 'Padavan\n'
+    elif [ -d /jffs ]; then printf 'ASUS/Merlin-like\n'
+    elif [ -f /data/etc/crontabs/root ]; then printf 'Xiaomi-like\n'
+    elif [ -w /var/mnt/cfg/firewall ] 2>/dev/null; then printf 'Netgear-like\n'
+    elif have systemctl && [ "$(read_init_name)" = systemd ]; then printf 'Linux/systemd\n'
+    elif have rc-status && rc-status -r >/dev/null 2>&1; then printf 'Linux/OpenRC\n'
+    else printf 'Generic Linux/BusyBox\n'
+    fi
+}
+
+check_writable_dir() {
+    d=$1
+    if [ -d "$d" ] && [ -w "$d" ]; then
+        printf '%s writable=yes free_kb=%s\n' "$d" "$(free_kb "$d" || printf unknown)"
+    else
+        parent=$(dirname "$d")
+        if [ -d "$parent" ] && [ -w "$parent" ]; then
+            printf '%s writable=parent parent=%s parent_free_kb=%s\n' "$d" "$parent" "$(free_kb "$parent" || printf unknown)"
+        else
+            printf '%s writable=no\n' "$d"
+        fi
+    fi
+}
+
+doctor_all() {
+    printf 'device_type=%s\n' "$(detect_device_type)"
+    printf 'init=%s\n' "$(read_init_name)"
+    printf 'recommended_backend=%s\n' "$(detect_boot_backend)"
+    printf 'cpu_arch=%s\n' "$(cpu_arch)"
+    if target=$(detect_target 2>/dev/null); then printf 'target=%s\n' "$target"; else printf 'target=unknown\n'; fi
+    printf 'DATA_DIR=%s\n' "$DATA_DIR"
+    printf 'TMP_DIR=%s\n' "$TMP_DIR"
+    printf 'RUN_DIR=%s\n' "$RUN_DIR"
+    printf 'tools_curl=%s\n' "$(have curl && printf yes || printf no)"
+    printf 'tools_wget=%s\n' "$(have wget && printf yes || printf no)"
+    printf 'tools_busybox=%s\n' "$(have busybox && printf yes || printf no)"
+    printf 'tools_tar=%s\n' "$(have tar && printf yes || printf no)"
+    printf 'tools_crontab=%s\n' "$(have crontab && printf yes || printf no)"
+    printf 'tools_setsid=%s\n' "$(have setsid && printf yes || printf no)"
+    printf 'tools_nohup=%s\n' "$(have nohup && printf yes || printf no)"
+    printf 'tun_device=%s\n' "$([ -e /dev/net/tun ] && printf present || printf missing)"
+    printf '%s\n' 'persistent_dir_candidates:'
+    check_writable_dir "$DATA_DIR"
+    [ "$DATA_DIR" != /data/tailscale ] && check_writable_dir /data/tailscale
+    check_writable_dir /jffs/tailscale
+    check_writable_dir /etc/storage/tailscale
+    check_writable_dir /opt/tailscale
+    boot_status
+}
+
+tailscale_up() {
+    ensure_config auto
+    make_base_dirs
+    files_ok || install_package
+    is_running || start_tailscaled
+    set -- "$CLI" "--socket=$SOCKET" up "$@"
+    [ -n "$AUTH_KEY" ] && set -- "$@" "--auth-key=$AUTH_KEY"
+    [ -n "$TS_HOSTNAME" ] && set -- "$@" "--hostname=$TS_HOSTNAME"
+    [ -n "$ADVERTISE_ROUTES" ] && set -- "$@" "--advertise-routes=$ADVERTISE_ROUTES"
+    [ -n "$ACCEPT_DNS" ] && set -- "$@" "--accept-dns=$ACCEPT_DNS"
+    [ -n "$ACCEPT_ROUTES" ] && set -- "$@" "--accept-routes=$ACCEPT_ROUTES"
+    [ -n "$EXIT_NODE" ] && set -- "$@" "--exit-node=$EXIT_NODE"
+    "$@"
+}
+
+login_status() {
+    ensure_config auto
+    if ! is_running; then
+        printf 'tailscaled=stopped\n'
+        return 1
+    fi
+    if [ -x "$CLI" ]; then
+        "$CLI" --socket="$SOCKET" status 2>/dev/null || true
+    else
+        printf 'tailscale_cli=missing\n'
+    fi
+}
+
+reset_state() {
+    stop_tailscaled
+    case "$STATEDIR" in
+        ''|/) fail "拒绝删除危险状态目录：$STATEDIR" ;;
+        *) rm -rf "$STATEDIR" ;;
+    esac
+    mkdir -p "$STATEDIR"
+    clear_start_state
+    start_tailscaled
+}
+
+doctor_tailscale() {
+    printf 'files_ok=%s\n' "$(files_ok && printf yes || printf no)"
+    printf 'running=%s\n' "$(is_running && printf yes || printf no)"
+    printf 'socket=%s\n' "$SOCKET"
+    printf 'socket_state=%s\n' "$([ -S "$SOCKET" ] && printf present || printf missing)"
+    printf 'state_dir=%s\n' "$STATEDIR"
+    printf 'state_dir_state=%s\n' "$([ -d "$STATEDIR" ] && printf present || printf missing)"
+    printf 'tun_device=%s\n' "$([ -e /dev/net/tun ] && printf present || printf missing)"
+    printf 'system_tailscale=%s\n' "$(command -v tailscale 2>/dev/null || printf missing)"
+    printf 'system_tailscaled=%s\n' "$(command -v tailscaled 2>/dev/null || printf missing)"
+    if have ping; then
+        ping -c 1 -W 2 controlplane.tailscale.com >/dev/null 2>&1 && printf 'controlplane_ping=ok\n' || printf 'controlplane_ping=failed\n'
+    else
+        printf 'controlplane_ping=skipped_no_ping\n'
+    fi
 }
 
 # ──────────────────────────── 卸载 ─────────────────────────────────────
@@ -877,6 +1442,16 @@ usage() {
   start       启动 tailscaled；如果二进制缺失会先下载安装。
   stop        停止 tailscaled；未运行也返回成功。
   restart     重启 tailscaled。
+  clear-error 清理启动失败熔断标记，允许再次自动拉起。
+  service-install 安装当前系统推荐的自启动 service。
+  service-remove  移除当前 backend 的自启动 service。
+  enable      开启自启动/保活；原生 init 不可用时回退 cron。
+  disable     关闭自启动/保活。
+  boot-status 查看自启动 backend 状态。
+  doctor      环境诊断；doctor tailscale 检查 Tailscale 运行态。
+  up          封装 tailscale up，自动带 socket。
+  login-status 查看 Tailscale 登录/连接状态。
+  reset-state 停止并删除 state 后重新启动。
   uninstall   完整卸载：停止进程、移除 cron、删除运行时文件；
               交互选择是否删除配置和脚本。
   status      查看配置、文件、进程、空间、cron 和下载 URL。
@@ -906,6 +1481,9 @@ usage() {
   MIN_TMP_FREE_KB=8192
   TAILSCALED_ARGS='--tun=tailscale0'  tailscaled 额外参数
   UPDATE_ON_ENSURE=0            设为 1 时 cron 每次重新下载安装
+  BOOT_BACKEND=auto             auto/procd/systemd/openrc/cron/manual
+  START_FAIL_LIMIT=3            连续启动失败达到阈值后熔断
+  START_FAIL_WINDOW=600         统计失败次数的时间窗口（秒）
 
 下载方式：
   留空 = 自动检测本机 Linux CPU 架构，从 jsDelivr CDN 下载：
@@ -947,40 +1525,68 @@ fi
 case "$cmd" in
     install)
         if [ "$subcmd_args" = "-y" ] || [ "$subcmd_args" = "--yes" ]; then
-            install_batch
+            run_locked install_batch
         else
-            install_all
+            run_locked install_all
         fi
         ;;
     update)
-        ensure_config auto
-        stop_tailscaled
-        install_package
-        write_cron
-        start_tailscaled
+        run_locked update_all
         ;;
     start)
-        start_tailscaled
+        run_locked start_tailscaled
         ;;
     stop)
-        stop_tailscaled
+        run_locked stop_tailscaled
         ;;
     restart)
-        stop_tailscaled
-        start_tailscaled
+        run_locked restart_all
+        ;;
+    clear-error)
+        run_locked clear_error_cmd
+        ;;
+    service-install)
+        run_locked service_install
+        ;;
+    service-remove)
+        run_locked service_remove
+        ;;
+    enable)
+        run_locked enable_autostart
+        ;;
+    disable)
+        run_locked disable_autostart
+        ;;
+    boot-status)
+        boot_status
+        ;;
+    doctor)
+        if [ "$subcmd_args" = tailscale ]; then doctor_tailscale; else doctor_all; fi
+        ;;
+    up)
+        shift || true
+        run_locked tailscale_up "$@"
+        ;;
+    daemon-start)
+        daemon_start_foreground
+        ;;
+    login-status)
+        login_status
+        ;;
+    reset-state)
+        run_locked reset_state
         ;;
     uninstall)
-        uninstall_all
+        run_locked uninstall_all
         ;;
     status)
         status
         ;;
     ensure)
-        ensure_all
+        run_locked ensure_all
         ;;
     cron)
-        ensure_config auto
-        write_cron
+        run_locked cron_all
         ;;
     help|-h|--help)
         usage
