@@ -16,9 +16,9 @@ This project does not fork the Tailscale source code. GitHub Actions periodicall
 - Tries UPX compression; architectures unsupported by UPX keep the Go-stripped minimal binary
 - Each archive contains only `tailscale` and `tailscaled`
 - Includes a BusyBox/POSIX sh compatible `tsmanager.sh`
-- `tsmanager.sh` automatically detects the current Linux CPU architecture by default and downloads the matching archive plus `.sha256` checksum file from jsDelivr CDN
+- `tsmanager.sh` automatically detects the current Linux CPU architecture by default and downloads the matching `.tar.gz` archive from jsDelivr CDN
 - Supports version selection: `latest` (default) or pin to a specific version (e.g. `v1.100.0`); falls back to latest if the specified version is unavailable
-- The archive must pass SHA256 integrity verification before extraction and installation
+- Does not require sha/checksum tools on routers; downloads the `.tar.gz` archive and extracts it directly
 - Supports downloads from GitHub Releases and jsDelivr CDN
 
 ## Why this exists
@@ -27,20 +27,22 @@ Official Tailscale is powerful, but the full distribution can be too large for s
 
 ## Supported architectures
 
-The workflow currently attempts to build these Linux CPU architectures:
+The workflow builds 10 Linux targets. Archive names use these `<target>` strings:
 
-- `linux/amd64`
-- `linux/386`
-- `linux/arm64`
-- `linux/arm/v7`
-- `linux/arm/v6`
-- `linux/arm/v5`
-- `linux/mipsle` softfloat
-- `linux/mips` softfloat
-- `linux/mips64le` softfloat
-- `linux/riscv64`
+| Package target | Go build settings | Common devices |
+| --- | --- | --- |
+| `linux-amd64` | `GOOS=linux GOARCH=amd64` | x86_64 / amd64 |
+| `linux-386` | `GOOS=linux GOARCH=386` | 32-bit x86 |
+| `linux-arm64` | `GOOS=linux GOARCH=arm64` | aarch64 / arm64 |
+| `linux-arm-v7` | `GOOS=linux GOARCH=arm GOARM=7` | armv7l / armv8l 32-bit systems |
+| `linux-arm-v6` | `GOOS=linux GOARCH=arm GOARM=6` | armv6l |
+| `linux-arm-v5` | `GOOS=linux GOARCH=arm GOARM=5` | armv5l / armel |
+| `linux-mipsle-softfloat` | `GOOS=linux GOARCH=mipsle GOMIPS=softfloat` | little-endian 32-bit MIPS routers |
+| `linux-mips-softfloat` | `GOOS=linux GOARCH=mips GOMIPS=softfloat` | big-endian 32-bit MIPS routers |
+| `linux-mips64le-softfloat` | `GOOS=linux GOARCH=mips64le GOMIPS64=softfloat` | little-endian 64-bit MIPS |
+| `linux-riscv64` | `GOOS=linux GOARCH=riscv64` | riscv64 |
 
-`tsmanager.sh` maps `uname -m` and, when needed, `/proc/cpuinfo` to the target names above. If auto-detection fails, set `TARGET` manually.
+`tsmanager.sh` maps `uname -m` and, when needed, `/proc/cpuinfo` to these target names. If auto-detection fails, set `TARGET` to one of the package targets in the table.
 
 ## Archive contents
 
@@ -65,12 +67,11 @@ tailscaled -> tailscale
 
 Release tags follow official Tailscale tags directly and do not add a `-small` suffix.
 
-Versioned download example:
+Current latest stable version example (`v1.100.0`):
 
 ```text
-https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0/tailscale-small_v1.88.0_linux-arm64.tar.gz
-https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0/tailscale-small_v1.88.0_linux-arm64.tar.gz.sha256
-https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0/tsmanager.sh
+https://github.com/xinghaix/tailscale-small/releases/download/v1.100.0/tailscale-small_v1.100.0_linux-arm64.tar.gz
+https://github.com/xinghaix/tailscale-small/releases/download/v1.100.0/tsmanager.sh
 ```
 
 ### jsDelivr CDN
@@ -82,17 +83,13 @@ Latest-version downloads:
 ```text
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tsmanager.sh
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_latest_linux-arm64.tar.gz
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_latest_linux-arm64.tar.gz.sha256
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/SHA256SUMS
 ```
 
 Versioned downloads:
 
 ```text
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0/tsmanager.sh
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0/tailscale-small_v1.88.0_linux-arm64.tar.gz
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0/tailscale-small_v1.88.0_linux-arm64.tar.gz.sha256
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0/SHA256SUMS
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.100.0/tsmanager.sh
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.100.0/tailscale-small_v1.100.0_linux-arm64.tar.gz
 ```
 
 The manager script can also be downloaded directly from the `main` branch source:
@@ -127,7 +124,7 @@ If the device cannot access jsDelivr, use GitHub Releases or a LAN HTTP URL inst
 `install` performs three actions:
 
 - Prompts for settings and writes `/data/tailscale/.env` (only user-specified values are saved; .env stays minimal)
-- Downloads the archive, verifies `.sha256`, then installs the binary into `/tmp/tailscale`
+- Downloads the `.tar.gz` archive and installs the binary into `/tmp/tailscale`
 - Automatically installs the cron self-healing task
 
 The script asks just 4 questions:
@@ -141,7 +138,6 @@ The default download URLs are generated from the detected target, for example ar
 
 ```text
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_latest_linux-arm64.tar.gz
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_latest_linux-arm64.tar.gz.sha256
 ```
 
 3. Start the daemon:
@@ -164,10 +160,10 @@ Or use an auth key:
 
 ## Custom download source
 
-Only one URL is needed; the checksum file must be at `<url>.sha256`. You can write it to `.env` or pass it as an environment variable.
+Only one `.tar.gz` URL is needed. You can write it to `.env` or pass it as an environment variable.
 
 ```sh
-PACKAGE_URL='https://example.com/tailscale-small_v1.88.0_linux-arm64.tar.gz' \
+PACKAGE_URL='https://example.com/tailscale-small_v1.100.0_linux-arm64.tar.gz' \
 /data/tailscale/tsmanager.sh install
 ```
 
@@ -176,9 +172,9 @@ PACKAGE_URL='https://example.com/tailscale-small_v1.88.0_linux-arm64.tar.gz' \
 All commands are designed to be idempotent and safe to run repeatedly.
 
 ```text
-install    first-run config + download + checksum verification + binary install + automatic cron setup
-update     download/verify/install again, refresh cron, then start tailscaled
-start      start tailscaled; download/verify/install first if runtime files are missing
+install    first-run config + download/install binary + automatic cron setup
+update     download/install again, refresh cron, then start tailscaled
+start      start tailscaled; download/install first if runtime files are missing
 stop       stop tailscaled; succeeds even if it is not running
 restart    restart tailscaled
 uninstall  full uninstall: stop process, remove cron, delete runtime files; interactively choose whether to delete config and script
@@ -243,11 +239,11 @@ The socket is fixed at:
 Cron runs `ensure` every 5 minutes. It performs the full install + start self-healing flow:
 
 - Reads download source, target, state directory, and other settings from `.env` plus defaults
-- If the binary in `/tmp` is missing, downloads the archive and `.sha256`, verifies, and installs it
+- If the binary in `/tmp` is missing, downloads the `.tar.gz` archive and installs it
 - If the `tailscaled` process is missing, starts it
 - If already installed and running, skips work and remains idempotent
 
-By default `UPDATE_ON_ENSURE=0`, so cron does not download every 5 minutes. To force verification/update every cron run, set this in `.env`:
+By default `UPDATE_ON_ENSURE=0`, so cron does not download every 5 minutes. To force download/install every cron run, set this in `.env`:
 
 ```sh
 UPDATE_ON_ENSURE=1
@@ -259,7 +255,7 @@ The build script lives at `.github/workflows/build-package.sh` because it is pri
 
 ```sh
 .github/workflows/build-package.sh \
-  --ref v1.88.0 \
+  --ref v1.100.0 \
   --goos linux \
   --goarch arm64 \
   --out dist
@@ -267,23 +263,25 @@ The build script lives at `.github/workflows/build-package.sh` because it is pri
 
 ## Automated build and release
 
-GitHub Actions checks the latest stable tag from official `tailscale/tailscale` every day. If the corresponding `vX.Y.Z` release does not exist, it builds all targets and publishes a release. Release tags follow official Tailscale tags directly and do not add a `-small` suffix.
+GitHub Actions checks the latest stable tag from official `tailscale/tailscale` at 03:17 UTC on the first day of every month. If the corresponding `vX.Y.Z` release does not exist, it builds 10 architecture archives and publishes a release. Release tags follow official Tailscale tags directly and do not add a `-small` suffix.
 
 Manual trigger:
 
 ```sh
 gh workflow run "Build minimal Tailscale packages" \
   --repo xinghaix/tailscale-small \
-  -f tailscale_ref=v1.88.0 \
+  -f tailscale_ref=v1.100.0 \
   -f force=true
 ```
 
 On release, the workflow:
 
-1. Builds all architecture archives
-2. Uploads them to GitHub Releases
-3. Mirrors them to the `cdn` branch
+1. Builds `.tar.gz` archives for all 10 targets
+2. Uploads the `.tar.gz` files and `tsmanager.sh` to GitHub Releases
+3. Mirrors the same files to the version directory on the `cdn` branch
 4. Generates `latest/` for jsDelivr usage
+
+Releases and CDN no longer publish `tailscale-small_*.txt`, `.sha256`, or `SHA256SUMS` files; router-side installs only need the matching `.tar.gz` archive.
 
 ## License
 

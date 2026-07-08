@@ -16,9 +16,9 @@
 - 尝试使用 UPX 进一步压缩；UPX 不支持的架构会保留 Go 已 strip 的极简二进制
 - 每个压缩包只包含：`tailscale` 和 `tailscaled`
 - 提供 BusyBox/POSIX sh 兼容的 `tsmanager.sh`
-- `tsmanager.sh` 默认自动检测当前 Linux CPU 架构，从 jsDelivr CDN 下载匹配的压缩包和 `.sha256` 校验文件
+- `tsmanager.sh` 默认自动检测当前 Linux CPU 架构，从 jsDelivr CDN 下载匹配的 `.tar.gz` 压缩包
 - 支持选择版本：`latest`（默认）或固定版本（如 `v1.100.0`），版本不存在时自动回退至 latest
-- 下载后必须通过 SHA256 完整性校验才会解压安装
+- 不依赖路由器上的 sha/checksum 工具，下载 `.tar.gz` 后直接解压安装
 - 支持 GitHub Releases 和 jsDelivr CDN 下载
 
 ## 为什么做这个
@@ -27,20 +27,22 @@
 
 ## 支持架构
 
-当前工作流会尝试构建这些 Linux CPU 架构：
+当前工作流构建 10 个 Linux target，包名中的 `<target>` 使用下列名称：
 
-- `linux/amd64`
-- `linux/386`
-- `linux/arm64`
-- `linux/arm/v7`
-- `linux/arm/v6`
-- `linux/arm/v5`
-- `linux/mipsle` softfloat
-- `linux/mips` softfloat
-- `linux/mips64le` softfloat
-- `linux/riscv64`
+| 包 target | Go 构建参数 | 常见设备 |
+| --- | --- | --- |
+| `linux-amd64` | `GOOS=linux GOARCH=amd64` | x86_64 / amd64 |
+| `linux-386` | `GOOS=linux GOARCH=386` | 32 位 x86 |
+| `linux-arm64` | `GOOS=linux GOARCH=arm64` | aarch64 / arm64 |
+| `linux-arm-v7` | `GOOS=linux GOARCH=arm GOARM=7` | armv7l / armv8l 32 位系统 |
+| `linux-arm-v6` | `GOOS=linux GOARCH=arm GOARM=6` | armv6l |
+| `linux-arm-v5` | `GOOS=linux GOARCH=arm GOARM=5` | armv5l / armel |
+| `linux-mipsle-softfloat` | `GOOS=linux GOARCH=mipsle GOMIPS=softfloat` | 小端 32 位 MIPS 路由器 |
+| `linux-mips-softfloat` | `GOOS=linux GOARCH=mips GOMIPS=softfloat` | 大端 32 位 MIPS 路由器 |
+| `linux-mips64le-softfloat` | `GOOS=linux GOARCH=mips64le GOMIPS64=softfloat` | 小端 64 位 MIPS |
+| `linux-riscv64` | `GOOS=linux GOARCH=riscv64` | riscv64 |
 
-`tsmanager.sh` 会根据 `uname -m` 和必要时的 `/proc/cpuinfo` 自动映射到上面的 target。自动识别失败时，可以手动设置 `TARGET`。
+`tsmanager.sh` 会根据 `uname -m` 和必要时的 `/proc/cpuinfo` 自动映射到这些 target。自动识别失败时，可以手动设置 `TARGET` 为表格中的包 target。
 
 ## 包内容
 
@@ -65,12 +67,11 @@ tailscaled -> tailscale
 
 Release tag 命名直接跟随官方 Tailscale tag，不额外添加 `-small` 后缀。
 
-版本化下载示例：
+当前最新稳定版示例（`v1.100.0`）：
 
 ```text
-https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0/tailscale-small_v1.88.0_linux-arm64.tar.gz
-https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0/tailscale-small_v1.88.0_linux-arm64.tar.gz.sha256
-https://github.com/xinghaix/tailscale-small/releases/download/v1.88.0/tsmanager.sh
+https://github.com/xinghaix/tailscale-small/releases/download/v1.100.0/tailscale-small_v1.100.0_linux-arm64.tar.gz
+https://github.com/xinghaix/tailscale-small/releases/download/v1.100.0/tsmanager.sh
 ```
 
 ### jsDelivr CDN
@@ -82,17 +83,13 @@ jsDelivr 不能直接加速 GitHub Release assets，所以本项目的 workflow 
 ```text
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tsmanager.sh
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_latest_linux-arm64.tar.gz
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_latest_linux-arm64.tar.gz.sha256
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/SHA256SUMS
 ```
 
 指定版本下载：
 
 ```text
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0/tsmanager.sh
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0/tailscale-small_v1.88.0_linux-arm64.tar.gz
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0/tailscale-small_v1.88.0_linux-arm64.tar.gz.sha256
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.88.0/SHA256SUMS
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.100.0/tsmanager.sh
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.100.0/tailscale-small_v1.100.0_linux-arm64.tar.gz
 ```
 
 管理脚本也可以直接从 `main` 分支获取最新源码版：
@@ -127,7 +124,7 @@ chmod +x tsmanager.sh
 `install` 会完成三件事：
 
 - 交互询问并写入 `/data/tailscale/.env`（只保存用户显式配置，.env 极为精简）
-- 下载压缩包，校验 `.sha256`，通过后安装二进制到 `/tmp/tailscale`
+- 下载 `.tar.gz` 压缩包并安装二进制到 `/tmp/tailscale`
 - 自动写入 cron 定时自愈任务
 
 脚本只问 4 个问题：
@@ -141,7 +138,6 @@ chmod +x tsmanager.sh
 
 ```text
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_latest_linux-arm64.tar.gz
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_latest_linux-arm64.tar.gz.sha256
 ```
 
 3. 启动：
@@ -164,10 +160,10 @@ https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_
 
 ## 自定义下载源
 
-只需设置一个下载地址，checksum 文件放在同路径的 `<地址>.sha256`。可以写入 `.env`，也可以临时通过环境变量传入。
+只需设置一个 `.tar.gz` 下载地址。可以写入 `.env`，也可以临时通过环境变量传入。
 
 ```sh
-PACKAGE_URL='https://example.com/tailscale-small_v1.88.0_linux-arm64.tar.gz' \
+PACKAGE_URL='https://example.com/tailscale-small_v1.100.0_linux-arm64.tar.gz' \
 /data/tailscale/tsmanager.sh install
 ```
 
@@ -176,9 +172,9 @@ PACKAGE_URL='https://example.com/tailscale-small_v1.88.0_linux-arm64.tar.gz' \
 所有命令都按幂等方式设计，可以重复执行。
 
 ```text
-install    首次配置 + 下载校验 + 安装二进制 + 自动写入 cron，重复执行幂等
-update     重新下载/校验/安装并刷新 cron，然后启动 tailscaled
-start      启动 tailscaled；如果二进制缺失会先下载校验并安装
+install    首次配置 + 下载安装二进制 + 自动写入 cron，重复执行幂等
+update     重新下载安装并刷新 cron，然后启动 tailscaled
+start      启动 tailscaled；如果二进制缺失会先下载安装
 stop       停止 tailscaled；未运行也返回成功
 restart    重启 tailscaled
 uninstall  完整卸载：停止进程、移除 cron、删除运行时文件；交互选择是否删除配置和脚本
@@ -243,11 +239,11 @@ socket 固定为：
 cron 每 5 分钟执行一次 `ensure`，它会执行完整的 install + start 自愈流程：
 
 - 从 `.env` 和默认配置读取下载源、架构、状态目录等配置
-- `/tmp` 里的二进制缺失时，下载压缩包和 `.sha256` 并校验安装
+- `/tmp` 里的二进制缺失时，下载 `.tar.gz` 压缩包并安装
 - `tailscaled` 进程不存在时，启动它
 - 已安装且已运行时直接跳过，保持幂等
 
-默认 `UPDATE_ON_ENSURE=0`，所以 cron 不会每 5 分钟重复下载。若你希望 cron 每次都重新校验和更新，可以在 `.env` 中设置：
+默认 `UPDATE_ON_ENSURE=0`，所以 cron 不会每 5 分钟重复下载。若你希望 cron 每次都重新下载并安装，可以在 `.env` 中设置：
 
 ```sh
 UPDATE_ON_ENSURE=1
@@ -259,7 +255,7 @@ UPDATE_ON_ENSURE=1
 
 ```sh
 .github/workflows/build-package.sh \
-  --ref v1.88.0 \
+  --ref v1.100.0 \
   --goos linux \
   --goarch arm64 \
   --out dist
@@ -267,23 +263,25 @@ UPDATE_ON_ENSURE=1
 
 ## 自动构建和发布
 
-GitHub Actions 每天检查官方 `tailscale/tailscale` 最新稳定 tag。如果对应的 `vX.Y.Z` release 不存在，就自动构建所有架构并发布。Release tag 命名直接跟随官方 Tailscale tag，不额外添加 `-small` 后缀。
+GitHub Actions 每月 1 日 UTC 03:17 检查官方 `tailscale/tailscale` 最新稳定 tag。如果对应的 `vX.Y.Z` release 不存在，就自动构建 10 个架构压缩包并发布。Release tag 命名直接跟随官方 Tailscale tag，不额外添加 `-small` 后缀。
 
 也可以手动触发：
 
 ```sh
 gh workflow run "Build minimal Tailscale packages" \
   --repo xinghaix/tailscale-small \
-  -f tailscale_ref=v1.88.0 \
+  -f tailscale_ref=v1.100.0 \
   -f force=true
 ```
 
 发布时 workflow 会：
 
-1. 构建所有架构压缩包
-2. 上传到 GitHub Release
-3. 同步到 `cdn` 分支
+1. 构建 10 个架构的 `.tar.gz` 压缩包
+2. 把 `.tar.gz` 和 `tsmanager.sh` 上传到 GitHub Release
+3. 同步同一批文件到 `cdn` 分支的版本目录
 4. 生成 `latest/` 目录供 jsDelivr 使用
+
+Release 和 CDN 不再发布 `tailscale-small_*.txt`、`.sha256` 或 `SHA256SUMS` 文件；路由器侧只需要下载对应架构的 `.tar.gz`。
 
 ## 许可证
 

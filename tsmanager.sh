@@ -23,7 +23,7 @@
 #       VERSION=v1.100.0 sh tsmanager.sh install -y
 #
 # 默认下载：自动检测当前 Linux CPU 架构，从 jsDelivr CDN 下载匹配的
-# tailscale-small_<version>_<target>.tar.gz，并自动校验同名 .sha256 文件。
+# tailscale-small_<version>_<target>.tar.gz。路由器环境不要求 sha/checksum 工具。
 # 支持固定版本（如 v1.100.0），默认使用 latest。
 
 set -eu
@@ -244,10 +244,6 @@ effective_package_url() {
     printf '%s/%s/tailscale-small_%s_%s.tar.gz\n' "$CDN_BASE" "$version" "$version" "$target"
 }
 
-effective_checksum_url() {
-    printf '%s.sha256\n' "$(effective_package_url)"
-}
-
 # ──────────────────────── 交互式 / 非交互式配置 ─────────────────────────
 
 ask_value() {
@@ -314,7 +310,7 @@ INTRO
   ── 下载设置 ──
   支持两种方式：
     1. 留空 = 自动从 jsDelivr CDN 下载，架构已检测为上面的值
-    2. 填入完整 URL = 使用自定义下载源（checksum 自动从 URL + .sha256 推导）
+    2. 填入完整 URL = 使用自定义下载源（只需 tar.gz 压缩包地址）
 PKGINTRO
 
     ask_value PACKAGE_URL \
@@ -369,7 +365,7 @@ configure_batch() {
     save_env
 }
 
-# ──────────────────────────── 下载 & 校验 ──────────────────────────────
+# ──────────────────────────── 下载 & 解压 ──────────────────────────────
 
 download_file() {
     url=$1
@@ -383,36 +379,6 @@ download_file() {
     else
         fail "需要 curl、wget 或 busybox wget 才能下载：$url"
     fi
-}
-
-sha256_of_file() {
-    file=$1
-    if have sha256sum; then
-        sha256sum "$file" | awk '{print $1}'
-    elif have shasum; then
-        shasum -a 256 "$file" | awk '{print $1}'
-    elif have busybox && busybox sha256sum --help >/dev/null 2>&1; then
-        busybox sha256sum "$file" | awk '{print $1}'
-    else
-        fail "需要 sha256sum、shasum 或 busybox sha256sum 才能校验完整性"
-    fi
-}
-
-verify_checksum() {
-    pkg=$1
-    sumfile=$2
-    expected=$(sed -n 's/^\([A-Fa-f0-9][A-Fa-f0-9]*\).*/\1/p' "$sumfile" | sed -n '1p')
-    case "$expected" in
-        ????????????????????????????????????????????????????????????????) ;;
-        *) fail "校验文件格式不正确：$sumfile" ;;
-    esac
-    actual=$(sha256_of_file "$pkg")
-    expected_lc=$(printf '%s' "$expected" | tr 'A-F' 'a-f')
-    actual_lc=$(printf '%s' "$actual" | tr 'A-F' 'a-f')
-    if [ "$expected_lc" != "$actual_lc" ]; then
-        fail "SHA256 校验失败：期望 $expected_lc，实际 $actual_lc"
-    fi
-    log "SHA256 校验通过：$actual_lc"
 }
 
 extract_package() {
@@ -436,17 +402,12 @@ install_package() {
     check_space "$TMP_DIR" "$MIN_TMP_FREE_KB"
 
     pkg="$TMP_DIR/tailscale-package.$$.tar.gz"
-    sumfile="$pkg.sha256"
     unpack="$TMP_DIR/unpack.$$"
-    rm -rf "$pkg" "$sumfile" "$unpack"
+    rm -rf "$pkg" "$unpack"
 
     pkg_url=$(effective_package_url)
-    sum_url=$(effective_checksum_url)
     log "下载压缩包：$pkg_url"
     download_file "$pkg_url" "$pkg"
-    log "下载校验文件：$sum_url"
-    download_file "$sum_url" "$sumfile"
-    verify_checksum "$pkg" "$sumfile"
     extract_package "$pkg" "$unpack"
 
     src=""
@@ -471,7 +432,7 @@ install_package() {
     fi
 
     ln -sf tailscale "$DAEMON"
-    rm -rf "$pkg" "$sumfile" "$unpack"
+    rm -rf "$pkg" "$unpack"
 }
 
 # ──────────────────────────── 进程管理 ─────────────────────────────────
@@ -590,7 +551,7 @@ cron_target() {
 cron_block() {
     cat <<EOF
 $CRON_BEGIN
-# 每 5 分钟执行完整自愈流程：必要时安装/校验 tailscale，然后启动 tailscaled。日志写到 /tmp，避免占用 /data。
+# 每 5 分钟执行完整自愈流程：必要时安装 tailscale，然后启动 tailscaled。日志写到 /tmp，避免占用 /data。
 */5 * * * * mkdir -p "$TMP_DIR" && DATA_DIR="$DATA_DIR" TMP_DIR="$TMP_DIR" "$DATA_DIR/$SCRIPT_NAME" ensure >>"$TMP_DIR/manager.log" 2>&1
 $CRON_END
 EOF
@@ -723,7 +684,6 @@ status() {
         printf '目标架构=unknown\n'
     fi
     printf '压缩包 URL=%s\n' "$(effective_package_url 2>/dev/null || printf 'unknown')"
-    printf '校验文件 URL=%s\n' "$(effective_checksum_url 2>/dev/null || printf 'unknown')"
 
     if files_ok; then
         printf '文件状态=正常\n'
@@ -779,7 +739,7 @@ ensure_all() {
     ensure_config auto
     make_base_dirs
     if [ "$UPDATE_ON_ENSURE" = 1 ] || ! files_ok; then
-        log "执行安装/校验流程"
+        log "执行安装流程"
         install_package
     else
         log "tailscale 文件已存在，跳过下载安装"
@@ -829,7 +789,7 @@ remove_runtime_files() {
     rm -f "$BIN" "$DAEMON" "$PIDFILE" "$LOGFILE" "$SOCKET" \
         "$TMP_DIR/tailscale.old" \
         "$TMP_DIR/manager.log"
-    rm -f "$TMP_DIR"/tailscale-package.*.tar.gz "$TMP_DIR"/tailscale-package.*.tar.gz.sha256 2>/dev/null || true
+    rm -f "$TMP_DIR"/tailscale-package.*.tar.gz 2>/dev/null || true
     rm -rf "$TMP_DIR"/unpack.* 2>/dev/null || true
     rmdir "$RUN_DIR" 2>/dev/null || true
     rmdir "$TMP_DIR" 2>/dev/null || true
@@ -885,10 +845,10 @@ usage() {
 用法：tsmanager.sh 命令 [选项]
 
 命令：
-  install     交互式配置 + 下载校验 + 安装 + 写入 cron。重复执行幂等。
+  install     交互式配置 + 下载安装 + 写入 cron。重复执行幂等。
   install -y  非交互安装：从环境变量读取所有配置，直接安装。
-  update      重新下载/校验/安装并刷新 cron，然后启动 tailscaled。
-  start       启动 tailscaled；如果二进制缺失会先下载校验并安装。
+  update      重新下载安装并刷新 cron，然后启动 tailscaled。
+  start       启动 tailscaled；如果二进制缺失会先下载安装。
   stop        停止 tailscaled；未运行也返回成功。
   restart     重启 tailscaled。
   uninstall   完整卸载：停止进程、移除 cron、删除运行时文件；
@@ -919,16 +879,16 @@ usage() {
   MIN_DATA_FREE_KB=64           最小磁盘空间限制
   MIN_TMP_FREE_KB=8192
   TAILSCALED_ARGS='--tun=tailscale0'  tailscaled 额外参数
-  UPDATE_ON_ENSURE=0            设为 1 时 cron 每次重新下载校验
+  UPDATE_ON_ENSURE=0            设为 1 时 cron 每次重新下载安装
 
 下载方式：
   留空 = 自动检测本机 Linux CPU 架构，从 jsDelivr CDN 下载：
-    tailscale-small_<版本>_<目标>.tar.gz + .sha256
+    tailscale-small_<版本>_<目标>.tar.gz
   版本默认 latest（跟随最新发布）。可设固定版本（如 v1.100.0）：
     如果指定版本存在 -> 用该版本
     如果拉不到线上列表 -> 按给定版本继续
     如果指定版本不存在 -> 自动回退到 latest
-  自定义 = 设置一个下载地址即可，checksum 自动从地址 + .sha256 推导：
+  自定义 = 设置一个 tar.gz 下载地址即可：
     PACKAGE_URL=https://example.com/tailscale-small_v1.100.0_linux-arm64.tar.gz
 
 目录策略：

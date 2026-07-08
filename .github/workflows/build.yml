@@ -113,7 +113,6 @@ jobs:
           mkdir -p release-files
           cp artifacts/* release-files/
           cp tsmanager.sh release-files/tsmanager.sh
-          (cd release-files && sha256sum * > SHA256SUMS)
           ls -lh release-files
       - name: Create or update release
         env:
@@ -125,6 +124,13 @@ jobs:
           title="tailscale-small ${TAILSCALE_REF}"
           notes="Minimal Tailscale packages built from official tailscale/tailscale ${TAILSCALE_REF}. Packages contain only tailscale and tailscaled -> tailscale."
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | while read -r asset; do
+              case "$asset" in
+                tailscale-small_*.txt|*.sha256|SHA256SUMS)
+                  gh release delete-asset "$RELEASE_TAG" "$asset" --yes
+                  ;;
+              esac
+            done
             gh release upload "$RELEASE_TAG" release-files/* --clobber
           else
             gh release create "$RELEASE_TAG" release-files/* --title "$title" --notes "$notes"
@@ -151,22 +157,16 @@ jobs:
           fi
 
           mkdir -p "$RELEASE_TAG" latest
+          rm -f "$RELEASE_TAG"/tailscale-small_*.txt "$RELEASE_TAG"/*.sha256 "$RELEASE_TAG"/SHA256SUMS
           cp "$GITHUB_WORKSPACE"/release-files/* "$RELEASE_TAG"/
           cp "$GITHUB_WORKSPACE"/release-files/tsmanager.sh latest/tsmanager.sh
 
-          rm -f latest/tailscale-small_latest_*.tar.gz latest/tailscale-small_latest_*.tar.gz.sha256 latest/tailscale-small_latest_*.txt latest/SHA256SUMS
+          rm -f latest/tailscale-small_latest_*.tar.gz latest/tailscale-small_latest_*.txt latest/*.sha256 latest/SHA256SUMS
           for f in "$GITHUB_WORKSPACE"/release-files/tailscale-small_${TAILSCALE_REF}_*.tar.gz; do
             base=$(basename "$f")
             latest_base=${base/$TAILSCALE_REF/latest}
             cp "$f" "latest/$latest_base"
-            (cd latest && sha256sum "$latest_base" > "$latest_base.sha256")
           done
-          for f in "$GITHUB_WORKSPACE"/release-files/tailscale-small_${TAILSCALE_REF}_*.txt; do
-            base=$(basename "$f")
-            latest_base=${base/$TAILSCALE_REF/latest}
-            cp "$f" "latest/$latest_base"
-          done
-          (cd latest && sha256sum * > SHA256SUMS)
 
           git add .
           if git diff --cached --quiet; then

@@ -68,7 +68,6 @@ echo "building $VERSION for $TARGET"
 chmod 0755 "$PKG/tailscale"
 ln -sf tailscale "$PKG/tailscaled"
 
-BEFORE_SIZE=$(wc -c <"$PKG/tailscale" | tr -d ' ')
 UPX_STATUS="not-installed"
 if command -v upx >/dev/null 2>&1; then
     if upx --best --lzma "$PKG/tailscale"; then
@@ -81,8 +80,6 @@ if command -v upx >/dev/null 2>&1; then
         UPX_STATUS="unsupported-or-failed"
     fi
 fi
-AFTER_SIZE=$(wc -c <"$PKG/tailscale" | tr -d ' ')
-
 ARCHIVE="tailscale-small_${VERSION}_${TARGET}.tar.gz"
 ARCHIVE_PATH="$OUT_DIR/$ARCHIVE"
 rm -f "$ARCHIVE_PATH"
@@ -96,29 +93,5 @@ rm -f "$ARCHIVE_PATH"
     fi
 )
 
-SHA_FILE="$OUT_DIR/$ARCHIVE.sha256"
-(
-    cd "$OUT_DIR"
-    sha256sum "$ARCHIVE" >"$ARCHIVE.sha256" 2>/dev/null || shasum -a 256 "$ARCHIVE" >"$ARCHIVE.sha256"
-)
-
-INFO_FILE="$OUT_DIR/tailscale-small_${VERSION}_${TARGET}.txt"
-{
-    echo "version=$VERSION"
-    echo "target=$TARGET"
-    echo "goos=$GOOS_TARGET"
-    echo "goarch=$GOARCH_TARGET"
-    echo "goarm=$GOARM_TARGET"
-    echo "gomips=$GOMIPS_TARGET"
-    echo "gomips64=$GOMIPS64_TARGET"
-    echo "size_before_upx=$BEFORE_SIZE"
-    echo "size_after_upx=$AFTER_SIZE"
-    echo "upx_status=$UPX_STATUS"
-    file "$PKG/tailscale" || true
-    tar -tzf "$ARCHIVE_PATH"
-    cat "$SHA_FILE"
-} >"$INFO_FILE"
-
 echo "archive=$ARCHIVE_PATH"
-echo "sha256=$(cat "$SHA_FILE")"
 echo "upx_status=$UPX_STATUS"
