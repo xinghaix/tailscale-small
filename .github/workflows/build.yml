@@ -202,3 +202,12 @@ jobs:
               echo "::warning::jsDelivr purge failed: $url"
           done
           echo "jsDelivr CDN purge done"
+
+          cdn_base="https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn"
+          verify_targets="latest/tsmanager.sh $RELEASE_TAG/tsmanager.sh latest/tailscale-small_latest_linux-arm64.tar.gz $RELEASE_TAG/tailscale-small_${TAILSCALE_REF}_linux-arm64.tar.gz"
+          for t in $verify_targets; do
+            url="$cdn_base/$t"
+            echo "verifying $url"
+            curl -fsSI --retry 2 --retry-delay 3 --max-time 30 "$url" >/dev/null
+          done
+          echo "jsDelivr CDN verification done"

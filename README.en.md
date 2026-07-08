@@ -178,11 +178,62 @@ update     download/install again, refresh cron, then start tailscaled
 start      start tailscaled; download/install first if runtime files are missing
 stop       stop tailscaled; succeeds even if it is not running
 restart    restart tailscaled
+clear-error clear the startup circuit-breaker marker so auto-start can retry
+service-install install the recommended service backend for the current system
+service-remove  remove the current backend service
+enable     enable autostart/keepalive; fall back to cron if native init is unavailable
+disable    disable autostart/keepalive
+boot-status show autostart backend status
+doctor     diagnose the device environment; doctor tailscale checks Tailscale runtime state
+up         wrap tailscale up with the configured socket
+login-status show Tailscale login/connection status
+reset-state stop tailscaled, delete state, then start again
 uninstall  full uninstall: stop process, remove cron, delete runtime files; interactively choose whether to delete config and script
-status     show config, files, process, storage, cron, and download URLs
+status     show config, files, process, storage, cron, lock/error state, and download URLs
 ensure     cron action: read .env/defaults, install if needed, start if needed; idempotent
 cron       automatically write or update the cron job without duplicating it
 help       show help
+```
+
+## Autostart and keepalive backends
+
+`BOOT_BACKEND=auto` selects the best available backend for the current system:
+
+- OpenWrt/procd: generates `/etc/init.d/tailscale-small` with procd respawn.
+- systemd: generates `tailscale-small.service` with `Restart=on-failure`.
+- OpenRC: generates `/etc/init.d/tailscale-small` with supervise-daemon respawn.
+- Other BusyBox/router environments: falls back to cron ensure.
+- `manual`: install only; do not configure autostart.
+
+Common commands:
+
+```sh
+/data/tailscale/tsmanager.sh doctor
+/data/tailscale/tsmanager.sh service-install
+/data/tailscale/tsmanager.sh enable
+/data/tailscale/tsmanager.sh boot-status
+```
+
+## Tailscale login and runtime status
+
+The script can wrap `tailscale up` and automatically use the configured socket:
+
+```sh
+TS_HOSTNAME=router ADVERTISE_ROUTES=192.168.1.0/24 \
+/data/tailscale/tsmanager.sh up --accept-routes=true
+```
+
+Runtime diagnostics:
+
+```sh
+/data/tailscale/tsmanager.sh doctor tailscale
+/data/tailscale/tsmanager.sh login-status
+```
+
+To switch account or reset identity:
+
+```sh
+/data/tailscale/tsmanager.sh reset-state
 ```
 
 ## Uninstall
@@ -284,10 +335,10 @@ On release, the workflow:
 3. Mirrors the same files to the version directory on the `cdn` branch
 4. Generates `latest/` for jsDelivr usage
 
-Releases and CDN no longer publish `tailscale-small_*.txt`, `.sha256`, or `SHA256SUMS` files; router-side installs only need the matching `.tar.gz` archive.
+Releases and CDN no longer publish `tailscale-small_*.txt`, `.sha256`, or `SHA256SUMS` files; router-side installs only need the matching `.tar.gz` archive. The release workflow purges jsDelivr after updating the `cdn` branch and verifies key files under both `latest` and the versioned directory via HTTP.
 
 ## License
 
-Repository scripts and workflows are MIT licensed.
+Repository scripts and workflows are licensed under the GNU General Public License v3.0 (GPL-3.0).
 
 Tailscale itself comes from the official `tailscale/tailscale` repository and follows its upstream licenses. Generated binaries are built from official source code. This project does not own the Tailscale trademark or upstream source copyright.

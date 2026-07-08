@@ -178,11 +178,62 @@ update     重新下载安装并刷新 cron，然后启动 tailscaled
 start      启动 tailscaled；如果二进制缺失会先下载安装
 stop       停止 tailscaled；未运行也返回成功
 restart    重启 tailscaled
+clear-error 清理启动失败熔断标记，允许再次自动拉起
+service-install 安装当前系统推荐的自启动 service
+service-remove  移除当前 backend 的自启动 service
+enable     开启自启动/保活；原生 init 不可用时回退 cron
+disable    关闭自启动/保活
+boot-status 查看自启动 backend 状态
+doctor     环境诊断；doctor tailscale 检查 Tailscale 运行态
+up         封装 tailscale up，自动带 socket
+login-status 查看 Tailscale 登录/连接状态
+reset-state 停止并删除 state 后重新启动
 uninstall  完整卸载：停止进程、移除 cron、删除运行时文件；交互选择是否删除配置和脚本
-status     查看配置、文件、进程、空间、cron 和下载 URL
+status     查看配置、文件、进程、空间、cron、锁状态、错误标记和下载 URL
 ensure     cron 使用：从 .env/默认配置读取，必要时安装并启动，幂等
 cron       自动写入或更新定时任务，重复执行不会重复追加
 help       显示帮助
+```
+
+## 自启动和保活 backend
+
+`BOOT_BACKEND=auto` 会自动选择当前系统最合适的方式：
+
+- OpenWrt/procd：生成 `/etc/init.d/tailscale-small`，使用 procd respawn 保活。
+- systemd：生成 `tailscale-small.service`，使用 `Restart=on-failure`。
+- OpenRC：生成 `/etc/init.d/tailscale-small`，使用 supervise-daemon respawn。
+- 其他 BusyBox/路由器环境：回退到 cron ensure。
+- `manual`：只安装，不写自启动。
+
+常用命令：
+
+```sh
+/data/tailscale/tsmanager.sh doctor
+/data/tailscale/tsmanager.sh service-install
+/data/tailscale/tsmanager.sh enable
+/data/tailscale/tsmanager.sh boot-status
+```
+
+## Tailscale 登录和状态
+
+可以用脚本封装 `tailscale up`，自动带上本项目固定 socket：
+
+```sh
+TS_HOSTNAME=router ADVERTISE_ROUTES=192.168.1.0/24 \
+/data/tailscale/tsmanager.sh up --accept-routes=true
+```
+
+诊断运行态：
+
+```sh
+/data/tailscale/tsmanager.sh doctor tailscale
+/data/tailscale/tsmanager.sh login-status
+```
+
+如需换账号或重置身份：
+
+```sh
+/data/tailscale/tsmanager.sh reset-state
 ```
 
 ## 卸载
@@ -284,10 +335,10 @@ gh workflow run "Build minimal Tailscale packages" \
 3. 同步同一批文件到 `cdn` 分支的版本目录
 4. 生成 `latest/` 目录供 jsDelivr 使用
 
-Release 和 CDN 不再发布 `tailscale-small_*.txt`、`.sha256` 或 `SHA256SUMS` 文件；路由器侧只需要下载对应架构的 `.tar.gz`。
+Release 和 CDN 不再发布 `tailscale-small_*.txt`、`.sha256` 或 `SHA256SUMS` 文件；路由器侧只需要下载对应架构的 `.tar.gz`。发布 workflow 会在同步 `cdn` 分支后主动 purge jsDelivr，并验证 `latest` 和版本目录中的关键文件可 HTTP 访问。
 
 ## 许可证
 
-本仓库脚本和工作流使用 MIT License。
+本仓库脚本和工作流使用 GNU General Public License v3.0（GPL-3.0）。
 
 Tailscale 本身来自官方 `tailscale/tailscale` 仓库，遵循其上游许可证。生成的二进制是从官方源码构建出来的，本项目不拥有 Tailscale 商标或上游源码版权。
