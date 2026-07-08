@@ -141,14 +141,16 @@ chmod +x tsmanager.sh
 
 - 状态目录 `statedir`，默认 `/data/tailscale/state`
 - 配置文件 `config`，可留空
-- 下载地址，留空则自动检测本机 Linux CPU 架构从 jsDelivr CDN 下载
 - 版本号 `VERSION`，默认 `latest`（跟随最新发布），也可固定为 `v1.100.0` 等
+- 自定义下载地址 `PACKAGE_URL`，默认留空
 
-默认下载地址会自动按架构生成，例如 arm64：
+`PACKAGE_URL` 只用于自定义下载源。直接回车留空时，脚本会按 `VERSION + CPU 架构` 自动生成下载地址，例如 arm64 + `v1.100.0`：
 
 ```text
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_latest_linux-arm64.tar.gz
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.100.0/tailscale-small_v1.100.0_linux-arm64.tar.gz
 ```
+
+如果 `PACKAGE_URL` 非空，它优先于 `VERSION`；这时 `VERSION` 只作为记录，不参与下载。
 
 3. 启动：
 

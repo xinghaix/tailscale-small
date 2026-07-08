@@ -141,14 +141,16 @@ The script asks just 4 questions:
 
 - `statedir`, default `/data/tailscale/state`
 - `config`, optional and can be empty
-- download URL; leave empty to auto-detect the current Linux CPU architecture and use jsDelivr CDN
 - version; default `latest` (follow the latest release), or pin to e.g. `v1.100.0`
+- custom download URL `PACKAGE_URL`, default empty
 
-The default download URLs are generated from the detected target, for example arm64:
+`PACKAGE_URL` is only for custom download sources. If left empty, the script derives the download URL from `VERSION + CPU architecture`, for example arm64 + `v1.100.0`:
 
 ```text
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_latest_linux-arm64.tar.gz
+https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.100.0/tailscale-small_v1.100.0_linux-arm64.tar.gz
 ```
+
+If `PACKAGE_URL` is non-empty, it takes precedence over `VERSION`; in that mode `VERSION` is recorded but not used for downloading.
 
 3. Start the daemon:
 

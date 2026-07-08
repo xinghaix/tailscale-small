@@ -152,6 +152,16 @@ normalize_legacy_config() {
             log "修正旧版下载地址：$old_package_url -> $PACKAGE_URL"
             ;;
     esac
+    case "$PACKAGE_URL" in
+        *'cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_latest_'*.tar.gz)
+            if [ "${VERSION:-latest}" != latest ]; then
+                old_package_url=$PACKAGE_URL
+                PACKAGE_URL=''
+                CONFIG_NORMALIZED=1
+                log "检测到 PACKAGE_URL 固定为 latest，但 VERSION=${VERSION}；已清空 PACKAGE_URL，让版本选择生效：$old_package_url"
+            fi
+            ;;
+    esac
 }
 
 normalize_legacy_config
@@ -455,11 +465,6 @@ configure_interactive() {
     make_base_dirs
     # 用 cpu_arch 展示架构（永不失败），避免非 Linux 上 detect_target 退出
     displayed_arch=$(cpu_arch)
-    default_package=${PACKAGE_URL:-}
-    if [ -z "$default_package" ]; then
-        default_target=$(detect_target)
-        default_package=$CDN_BASE/latest/tailscale-small_latest_${default_target}.tar.gz
-    fi
 
     cat >&2 <<INTRO
 
@@ -484,19 +489,6 @@ INTRO
         "$CONFIG" \
         "  非空时会传给 tailscaled --config，一般不需要。"
 
-    cat >&2 <<'PKGINTRO'
-
-  ── 下载设置 ──
-  支持两种方式：
-    1. 留空 = 自动从 jsDelivr CDN 下载，架构已检测为上面的值
-    2. 填入完整 URL = 使用自定义下载源（只需 tar.gz 压缩包地址）
-PKGINTRO
-
-    ask_value PACKAGE_URL \
-        "下载地址" \
-        "$default_package" \
-        "  默认：$default_package"
-
     cat >&2 <<'VERINTRO'
 
   ── 版本选择 ──
@@ -508,14 +500,43 @@ VERINTRO
         "Tailscale 版本" \
         "$VERSION"
 
+    default_target=$(detect_target)
+    derived_version=$(resolve_version)
+    derived_package=$CDN_BASE/$derived_version/tailscale-small_${derived_version}_${default_target}.tar.gz
+
+    cat >&2 <<PKGINTRO
+
+  ── 下载设置 ──
+  支持两种方式：
+    1. 直接回车 = 根据 VERSION 和架构自动生成下载地址
+    2. 填入完整 URL = 使用自定义下载源（此时 VERSION 只记录，不参与下载）
+
+  当前自动下载地址：$derived_package
+PKGINTRO
+
+    ask_value PACKAGE_URL \
+        "自定义下载地址（留空使用上面的自动地址）" \
+        "$PACKAGE_URL"
+
+    if [ -z "$PACKAGE_URL" ]; then
+        summary_package=$derived_package
+    else
+        summary_package=$PACKAGE_URL
+    fi
+
     # 确认摘要
     echo >&2
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
     echo "  配置摘要：" >&2
     echo "  · 状态目录：$STATEDIR" >&2
     echo "  · 配置文件：${CONFIG:-(空)}" >&2
-    echo "  · 下载地址：$PACKAGE_URL" >&2
     echo "  · 版　　本：$VERSION" >&2
+    echo "  · 下载地址：$summary_package" >&2
+    if [ -z "$PACKAGE_URL" ]; then
+        echo "  · 下载模式：自动（VERSION + 架构生成，不把 URL 固化进 .env）" >&2
+    else
+        echo "  · 下载模式：自定义 PACKAGE_URL（优先于 VERSION）" >&2
+    fi
     echo "  · 二进制安装到：$TMP_DIR/tailscale" >&2
     echo "  · socket：$SOCKET" >&2
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
@@ -536,10 +557,7 @@ configure_batch() {
     STATEDIR=${STATEDIR:-/data/tailscale/state}
     CONFIG=${CONFIG:-}
     VERSION=${VERSION:-latest}
-    if [ -z "$PACKAGE_URL" ]; then
-        target=$(detect_target)
-        PACKAGE_URL=$CDN_BASE/$VERSION/tailscale-small_${VERSION}_${target}.tar.gz
-    fi
+    # PACKAGE_URL 只表示用户显式自定义下载源；留空时运行时由 VERSION + TARGET 自动生成。
     make_base_dirs
     save_env
 }
