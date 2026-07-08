@@ -137,20 +137,21 @@ chmod +x tsmanager.sh
 /data/tailscale/tsmanager.sh install keepalive # 等价 install enable
 ```
 
-脚本只问 4 个问题：
+脚本只问 5 个问题：
 
 - 状态目录 `statedir`，默认 `/data/tailscale/state`
 - 配置文件 `config`，可留空
 - 版本号 `VERSION`，默认 `latest`（跟随最新发布），也可固定为 `v1.100.0` 等
-- 自定义下载地址 `PACKAGE_URL`，默认留空
+- 是否使用自定义下载 URL，默认否
+- 只有选择“是”时，才输入自定义 `PACKAGE_URL`
 
-`PACKAGE_URL` 只用于自定义下载源。直接回车留空时，脚本会按 `VERSION + CPU 架构` 自动生成下载地址，例如 arm64 + `v1.100.0`：
+默认路径是：先选择 `VERSION`，脚本按 `VERSION + CPU 架构` 自动生成下载地址，例如 arm64 + `v1.100.0`：
 
 ```text
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.100.0/tailscale-small_v1.100.0_linux-arm64.tar.gz
 ```
 
-如果 `PACKAGE_URL` 非空，它优先于 `VERSION`；这时 `VERSION` 只作为记录，不参与下载。
+只有当你有私有镜像、内网 HTTP 或手写 tar.gz 地址时，才选择自定义 URL。`PACKAGE_URL` 非空时优先于 `VERSION`；这时 `VERSION` 只作为记录，不参与下载。
 
 3. 启动：
 

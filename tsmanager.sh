@@ -461,6 +461,17 @@ ask_value() {
     esac
 }
 
+ask_yes_no_config_default_no() {
+    text=$1
+    printf '  %s [y/N]: ' "$text" >&2
+    if read ans; then
+        case "$ans" in
+            y|Y|yes|YES|Yes) return 0 ;;
+        esac
+    fi
+    return 1
+}
+
 configure_interactive() {
     make_base_dirs
     # 用 cpu_arch 展示架构（永不失败），避免非 Linux 上 detect_target 退出
@@ -507,16 +518,21 @@ VERINTRO
     cat >&2 <<PKGINTRO
 
   ── 下载设置 ──
-  支持两种方式：
-    1. 直接回车 = 根据 VERSION 和架构自动生成下载地址
-    2. 填入完整 URL = 使用自定义下载源（此时 VERSION 只记录，不参与下载）
+  默认使用 VERSION + 架构自动生成下载地址：
+    $derived_package
 
-  当前自动下载地址：$derived_package
+  只有在你有私有镜像、内网 HTTP 或手写 tar.gz 地址时，才需要自定义下载 URL。
+  一旦启用自定义 URL，PACKAGE_URL 会优先于 VERSION。
 PKGINTRO
 
-    ask_value PACKAGE_URL \
-        "自定义下载地址（留空使用上面的自动地址）" \
-        "$PACKAGE_URL"
+    if ask_yes_no_config_default_no "是否使用自定义下载 URL？默认否，直接使用上面的自动地址"; then
+        ask_value PACKAGE_URL \
+            "自定义下载地址" \
+            "$PACKAGE_URL" \
+            "  请输入完整 .tar.gz URL；此模式下 VERSION 只记录，不参与下载。"
+    else
+        PACKAGE_URL=''
+    fi
 
     if [ -z "$PACKAGE_URL" ]; then
         summary_package=$derived_package

@@ -137,20 +137,21 @@ You can choose the install semantics explicitly:
 /data/tailscale/tsmanager.sh install keepalive # same as install enable
 ```
 
-The script asks just 4 questions:
+The script asks just 5 questions:
 
 - `statedir`, default `/data/tailscale/state`
 - `config`, optional and can be empty
 - version; default `latest` (follow the latest release), or pin to e.g. `v1.100.0`
-- custom download URL `PACKAGE_URL`, default empty
+- whether to use a custom download URL, default no
+- only if you answer yes, the custom `PACKAGE_URL`
 
-`PACKAGE_URL` is only for custom download sources. If left empty, the script derives the download URL from `VERSION + CPU architecture`, for example arm64 + `v1.100.0`:
+The default path is: choose `VERSION`, then the script derives the download URL from `VERSION + CPU architecture`, for example arm64 + `v1.100.0`:
 
 ```text
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.100.0/tailscale-small_v1.100.0_linux-arm64.tar.gz
 ```
 
-If `PACKAGE_URL` is non-empty, it takes precedence over `VERSION`; in that mode `VERSION` is recorded but not used for downloading.
+Only choose a custom URL when you have a private mirror, LAN HTTP server, or handwritten tar.gz URL. If `PACKAGE_URL` is non-empty, it takes precedence over `VERSION`; in that mode `VERSION` is recorded but not used for downloading.
 
 3. Start the daemon:
 
