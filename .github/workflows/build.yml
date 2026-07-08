@@ -157,11 +157,11 @@ jobs:
           fi
 
           mkdir -p "$RELEASE_TAG" latest
-          rm -f "$RELEASE_TAG"/tailscale-small_*.txt "$RELEASE_TAG"/*.sha256 "$RELEASE_TAG"/SHA256SUMS
+          rm -f "$RELEASE_TAG"/tailscale-small_*.txt "$RELEASE_TAG"/*.sha256 "$RELEASE_TAG"/SHA256SUMS "$RELEASE_TAG"/tailscale-manager.sh
           cp "$GITHUB_WORKSPACE"/release-files/* "$RELEASE_TAG"/
           cp "$GITHUB_WORKSPACE"/release-files/tsmanager.sh latest/tsmanager.sh
 
-          rm -f latest/tailscale-small_latest_*.tar.gz latest/tailscale-small_latest_*.txt latest/*.sha256 latest/SHA256SUMS
+          rm -f latest/tailscale-small_latest_*.tar.gz latest/tailscale-small_latest_*.txt latest/*.sha256 latest/SHA256SUMS latest/tailscale-manager.sh
           for f in "$GITHUB_WORKSPACE"/release-files/tailscale-small_${TAILSCALE_REF}_*.tar.gz; do
             base=$(basename "$f")
             latest_base=${base/$TAILSCALE_REF/latest}
