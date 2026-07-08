@@ -121,12 +121,21 @@ chmod +x tsmanager.sh
 /data/tailscale/tsmanager.sh install
 ```
 
-`install` 会完成四件事：
+裸 `install` 默认等价于 `install enable`，会完成四件事：
 
 - 交互询问并写入 `/data/tailscale/.env`（只保存用户显式配置，.env 极为精简）
 - 下载 `.tar.gz` 压缩包并安装二进制到 `/tmp/tailscale`
-- 自动写入 cron 定时自愈任务
+- 开启自启动/保活：优先 native backend（procd/systemd/OpenRC），不可用时回退 cron
 - 自动启动 `tailscaled`
+
+也可以显式选择安装语义：
+
+```sh
+/data/tailscale/tsmanager.sh install only      # 只安装，不启动，不开启自启/保活
+/data/tailscale/tsmanager.sh install start     # 安装并启动，不开启自启/保活
+/data/tailscale/tsmanager.sh install enable    # 安装 + 开启自启/保活 + 启动（默认）
+/data/tailscale/tsmanager.sh install keepalive # 等价 install enable
+```
 
 脚本只问 4 个问题：
 
@@ -173,7 +182,11 @@ PACKAGE_URL='https://example.com/tailscale-small_v1.100.0_linux-arm64.tar.gz' \
 所有命令都按幂等方式设计，可以重复执行。
 
 ```text
-install    首次配置 + 下载安装二进制 + 自动写入 cron + 自动启动，重复执行幂等
+install    默认等价 install enable：首次配置 + 安装 + 自启动/保活 + 启动
+install only    只配置 + 下载安装；不启动，不开启自启动/保活
+install start   配置 + 下载安装 + 启动；不开启自启动/保活
+install enable  配置 + 下载安装 + 开启自启动/保活 + 启动
+install keepalive 等价 install enable
 update     重新下载安装并刷新 cron，然后启动 tailscaled
 start      启动 tailscaled；如果二进制缺失会先下载安装
 stop       停止 tailscaled；未运行也返回成功
@@ -282,7 +295,7 @@ socket 固定为：
 
 ## 定时自愈
 
-`install` 会自动写入 cron；也可以手动刷新：
+`install enable` 会自动安装推荐的自启动/保活 backend；在 generic BusyBox/路由器环境会回退写入 cron。也可以手动刷新 cron：
 
 ```sh
 /data/tailscale/tsmanager.sh cron
@@ -295,7 +308,7 @@ cron 每 5 分钟执行一次 `ensure`，它会执行完整的 install + start �
 - `tailscaled` 进程不存在时，启动它
 - 已安装且已运行时直接跳过，保持幂等
 
-也就是说，`install` 和 `ensure` 现在都带有 `start` 语义：缺文件就补安装，没进程就拉起 `tailscaled`。
+也就是说，默认 `install` / `install enable` 和 `ensure` 都带有 `start` 语义：缺文件就补安装，没进程就拉起 `tailscaled`。如果只想落文件，用 `install only`；如果只想安装并启动但不自启，用 `install start`。
 
 默认 `UPDATE_ON_ENSURE=0`，所以 cron 不会每 5 分钟重复下载。若你希望 cron 每次都重新下载并安装，可以在 `.env` 中设置：
 

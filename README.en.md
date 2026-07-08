@@ -121,12 +121,21 @@ If the device cannot access jsDelivr, use GitHub Releases or a LAN HTTP URL inst
 /data/tailscale/tsmanager.sh install
 ```
 
-`install` performs four actions:
+Bare `install` defaults to `install enable` and performs four actions:
 
 - Prompts for settings and writes `/data/tailscale/.env` (only user-specified values are saved; .env stays minimal)
 - Downloads the `.tar.gz` archive and installs the binary into `/tmp/tailscale`
-- Automatically installs the cron self-healing task
+- Enables autostart/keepalive through the best native backend (procd/systemd/OpenRC), falling back to cron when needed
 - Automatically starts `tailscaled`
+
+You can choose the install semantics explicitly:
+
+```sh
+/data/tailscale/tsmanager.sh install only      # install files only; no start, no autostart/keepalive
+/data/tailscale/tsmanager.sh install start     # install and start; no autostart/keepalive
+/data/tailscale/tsmanager.sh install enable    # install + autostart/keepalive + start (default)
+/data/tailscale/tsmanager.sh install keepalive # same as install enable
+```
 
 The script asks just 4 questions:
 
@@ -173,7 +182,11 @@ PACKAGE_URL='https://example.com/tailscale-small_v1.100.0_linux-arm64.tar.gz' \
 All commands are designed to be idempotent and safe to run repeatedly.
 
 ```text
-install    first-run config + download/install binary + automatic cron setup + automatic start
+install    defaults to install enable: first-run config + install + autostart/keepalive + start
+install only    configure + download/install only; no start, no autostart/keepalive
+install start   configure + download/install + start; no autostart/keepalive
+install enable  configure + download/install + enable autostart/keepalive + start
+install keepalive same as install enable
 update     download/install again, refresh cron, then start tailscaled
 start      start tailscaled; download/install first if runtime files are missing
 stop       stop tailscaled; succeeds even if it is not running
@@ -282,7 +295,7 @@ The socket is fixed at:
 
 ## Self-healing cron
 
-`install` writes cron automatically. You can also refresh it manually:
+`install enable` installs the recommended autostart/keepalive backend automatically; on generic BusyBox/router systems it falls back to cron. You can also refresh cron manually:
 
 ```sh
 /data/tailscale/tsmanager.sh cron
@@ -295,7 +308,7 @@ Cron runs `ensure` every 5 minutes. It performs the full install + start self-he
 - If the `tailscaled` process is missing, starts it
 - If already installed and running, skips work and remains idempotent
 
-That means both `install` and `ensure` now carry `start` semantics: if files are missing they reinstall, and if the daemon is not running they bring `tailscaled` up.
+That means default `install` / `install enable` and `ensure` carry `start` semantics: if files are missing they reinstall, and if the daemon is not running they bring `tailscaled` up. Use `install only` for files only, or `install start` to install and start without autostart.
 
 By default `UPDATE_ON_ENSURE=0`, so cron does not download every 5 minutes. To force download/install every cron run, set this in `.env`:
 

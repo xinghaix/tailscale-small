@@ -1168,7 +1168,7 @@ status() {
 }
 
 ensure_config() {
-    mode=${1:-auto}
+    cfg_mode=${1:-auto}
     if [ -f "$ENV_FILE" ]; then
         if [ "$CONFIG_NORMALIZED" = 1 ]; then
             save_env
@@ -1176,11 +1176,11 @@ ensure_config() {
         fi
         return 0
     fi
-    if [ "$mode" = interactive ] && [ -t 0 ]; then
+    if [ "$cfg_mode" = interactive ] && [ -t 0 ]; then
         configure_interactive
         return 0
     fi
-    if [ "$mode" = batch ]; then
+    if [ "$cfg_mode" = batch ]; then
         configure_batch
         return 0
     fi
@@ -1207,18 +1207,43 @@ ensure_all() {
     fi
 }
 
-install_all() {
-    ensure_config interactive
+install_with_mode() {
+    install_semantics=$1
+    install_batch_flag=${2:-0}
+    case "$install_semantics" in
+        only|start|enable|keepalive|autostart) ;;
+        *) fail "不支持的 install 语义：$install_semantics" ;;
+    esac
+
+    if [ "$install_batch_flag" = 1 ]; then
+        ensure_config batch
+    else
+        ensure_config interactive
+    fi
+
     install_package
-    enable_autostart
-    start_tailscaled
+    case "$install_semantics" in
+        only)
+            log "安装完成：未启动 tailscaled，也未开启自启动/保活"
+            ;;
+        start)
+            log "安装完成：按 install start 语义启动 tailscaled，不开启自启动/保活"
+            start_tailscaled
+            ;;
+        enable|keepalive|autostart)
+            log "安装完成：按 install enable 语义开启自启动/保活并启动 tailscaled"
+            enable_autostart
+            start_tailscaled
+            ;;
+    esac
+}
+
+install_all() {
+    install_with_mode enable 0
 }
 
 install_batch() {
-    ensure_config batch
-    install_package
-    enable_autostart
-    start_tailscaled
+    install_with_mode enable 1
 }
 
 update_all() {
@@ -1436,8 +1461,12 @@ usage() {
 用法：tsmanager.sh 命令 [选项]
 
 命令：
-  install     交互式配置 + 下载安装 + 写入 cron。重复执行幂等。
-  install -y  非交互安装：从环境变量读取所有配置，直接安装。
+  install     等价 install enable：配置 + 安装 + 开启自启动/保活 + 启动。
+  install only    只配置 + 下载安装；不启动，不开启自启动/保活。
+  install start   配置 + 下载安装 + 启动；不开启自启动/保活。
+  install enable  配置 + 下载安装 + 开启自启动/保活 + 启动。
+  install keepalive 等价 install enable。
+  install -y / install start -y  非交互安装：从环境变量读取配置。
   update      重新下载安装并刷新 cron，然后启动 tailscaled。
   start       启动 tailscaled；如果二进制缺失会先下载安装。
   stop        停止 tailscaled；未运行也返回成功。
@@ -1508,27 +1537,41 @@ EOF
 
 # 解析命令行
 cmd=${1:-status}
-shift_args=false
+global_yes=0
 case "$cmd" in
     -y|--yes)
-        cmd=${2:-install}
-        shift_args=true
+        global_yes=1
+        shift || true
+        cmd=${1:-install}
         ;;
 esac
-
-if $shift_args; then
-    subcmd_args="$*"
-else
-    subcmd_args="${2:-}"
-fi
+[ $# -gt 0 ] && shift || true
 
 case "$cmd" in
     install)
-        if [ "$subcmd_args" = "-y" ] || [ "$subcmd_args" = "--yes" ]; then
-            run_locked install_batch
-        else
-            run_locked install_all
-        fi
+        install_mode=enable
+        install_batch_mode=$global_yes
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -y|--yes)
+                    install_batch_mode=1
+                    ;;
+                only|download|files)
+                    install_mode=only
+                    ;;
+                start|run)
+                    install_mode=start
+                    ;;
+                enable|keepalive|autostart)
+                    install_mode=enable
+                    ;;
+                *)
+                    fail "不支持的 install 参数：$1；可用：only/start/enable/keepalive/-y"
+                    ;;
+            esac
+            shift
+        done
+        run_locked install_with_mode "$install_mode" "$install_batch_mode"
         ;;
     update)
         run_locked update_all
@@ -1561,7 +1604,7 @@ case "$cmd" in
         boot_status
         ;;
     doctor)
-        if [ "$subcmd_args" = tailscale ]; then doctor_tailscale; else doctor_all; fi
+        if [ "${1:-}" = tailscale ]; then doctor_tailscale; else doctor_all; fi
         ;;
     up)
         shift || true
