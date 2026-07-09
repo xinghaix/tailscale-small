@@ -4,30 +4,72 @@ English | [中文](README.md)
 
 Minimal Tailscale release packages for tiny systems, embedded Linux, routers, and read-only or low-storage devices.
 
-This project does not fork the Tailscale source code. GitHub Actions periodically fetches the latest release tag from the official `tailscale/tailscale` repository and builds minimal binaries with the official build script.
+This project does not fork Tailscale. GitHub Actions periodically fetches the latest release tag from official `tailscale/tailscale` and builds minimal binaries with the official build script. On-device, a single-file `tsmanager.sh` handles install, autostart, self-heal, diagnostics, and uninstall.
 
 ## Features
 
-- Uses official Tailscale source code and official `build_dist.sh`
-- Build flags: `build_dist.sh --extra-small --box`
-- `CGO_ENABLED=0`
-- Single combined binary: `tailscale`
-- Daemon entry symlink: `tailscaled -> tailscale`
-- Tries UPX compression; architectures unsupported by UPX keep the Go-stripped minimal binary
+- Official Tailscale source and `build_dist.sh --extra-small --box`
+- `CGO_ENABLED=0`; combined binary `tailscale`; `tailscaled -> tailscale`
+- Optional UPX; unsupported archs keep the Go-stripped binary
 - Each archive contains only `tailscale` and `tailscaled`
-- Includes a BusyBox/POSIX sh compatible `tsmanager.sh`
-- `tsmanager.sh` automatically detects the current Linux CPU architecture by default and downloads the matching `.tar.gz` archive from jsDelivr CDN
-- Supports version selection: `latest` (default) or pin to a specific version (e.g. `v1.100.0`); falls back to latest if the specified version is unavailable
-- Does not require sha/checksum tools on routers; downloads the `.tar.gz` archive and extracts it directly
-- Supports downloads from GitHub Releases and jsDelivr CDN
+- BusyBox/POSIX sh `tsmanager.sh` runtime manager
+- Auto-detects Linux CPU arch; **`VERSION` controls downloads**; custom `PACKAGE_URL` is explicit opt-in
+- Version may be `latest` or pinned (e.g. `v1.100.0`); pinned versions do **not** silently fall back to latest unless `VERSION_FALLBACK=1`
+- Downloads prefer jsDelivr CDN, then GitHub Releases; no router-side sha/checksum tools; light binary validation before install
+- Autostart backends: procd / systemd / OpenRC, with cron `ensure` as fallback
 
 ## Why this exists
 
-Official Tailscale is powerful, but the full distribution can be too large for small routers, embedded systems, and temporary rescue systems. This repository provides an open, reproducible, automatically updated minimal package so users can run Tailscale from `/tmp` or another small writable area.
+Official Tailscale is powerful, but the full distribution is often too large for small routers, embedded systems, and rescue images. This repo provides a reproducible, auto-updated minimal package that can run from `/tmp` or another small writable area.
+
+## Architecture overview
+
+Two independent pipelines meet at release artifacts:
+
+| Pipeline | Artifacts | Consumers |
+| --- | --- | --- |
+| Build / publish | `tailscale-small_<ver>_<target>.tar.gz` + `tsmanager.sh` | GitHub Releases, `cdn` branch / jsDelivr |
+| Runtime management | on-device `.env`, binary, service/cron, state | routers / embedded devices |
+
+```text
+upstream tailscale/tailscale (tag vX.Y.Z)
+        │
+        ▼
+GitHub Actions (monthly 1st 03:17 UTC / manual)
+  build_dist.sh --extra-small --box · CGO_ENABLED=0 · optional UPX
+        │
+        ├─► GitHub Release tag = vX.Y.Z (no -small suffix)
+        │     · 10-arch .tar.gz
+        │     · tsmanager.sh
+        │
+        └─► branch `cdn`
+              · cdn/vX.Y.Z/…  ·  cdn/latest/…
+              · jsDelivr purge + HTTP checks
+```
+
+Repository layout:
+
+```text
+tailscale-small/
+├── tsmanager.sh                 # single-file POSIX runtime manager
+├── tests/run.sh                 # developer regression tests
+├── README.md / README.en.md     # user docs (includes architecture)
+└── .github/workflows/
+    ├── build.yml                # build + release + CDN sync
+    └── build-package.sh         # per-arch packager
+```
+
+**Out of scope**
+
+- No Tailscale source fork
+- No mandatory router-side `sha256sum` / checksum files
+- No multi-script distribution
+- `ensure` does not auto-upgrade by default (`UPDATE_ON_ENSURE=0`)
+- Auto-derived download URLs are not persisted (empty `PACKAGE_URL` is not written to `.env`)
 
 ## Supported architectures
 
-The workflow builds 10 Linux targets. Archive names use these `<target>` strings:
+The workflow builds 10 Linux targets:
 
 | Package target | Go build settings | Common devices |
 | --- | --- | --- |
@@ -42,32 +84,28 @@ The workflow builds 10 Linux targets. Archive names use these `<target>` strings
 | `linux-mips64le-softfloat` | `GOOS=linux GOARCH=mips64le GOMIPS64=softfloat` | little-endian 64-bit MIPS |
 | `linux-riscv64` | `GOOS=linux GOARCH=riscv64` | riscv64 |
 
-`tsmanager.sh` maps `uname -m` and, when needed, `/proc/cpuinfo` to these target names. If auto-detection fails, set `TARGET` to one of the package targets in the table.
+`tsmanager.sh` maps `uname -m` and, when needed, `/proc/cpuinfo`. On failure, set `TARGET` manually.
 
 ## Archive contents
-
-Each release archive is named like:
 
 ```text
 tailscale-small_<tailscale-version>_<target>.tar.gz
 ```
 
-After extraction it contains only:
+After extraction:
 
 ```text
 tailscale
 tailscaled -> tailscale
 ```
 
-`tailscale` is the real binary, and `tailscaled` is a symlink. The combined binary chooses CLI or daemon mode based on argv name.
+`tailscale` is the real binary; `tailscaled` is a symlink. The combined binary selects CLI or daemon mode from argv.
 
 ## Download options
 
 ### GitHub Releases
 
-Release tags follow official Tailscale tags directly and do not add a `-small` suffix.
-
-Current latest stable version example (`v1.100.0`):
+Release tags follow official Tailscale tags (no `-small` suffix). Example (`v1.100.0`):
 
 ```text
 https://github.com/xinghaix/tailscale-small/releases/download/v1.100.0/tailscale-small_v1.100.0_linux-arm64.tar.gz
@@ -76,35 +114,134 @@ https://github.com/xinghaix/tailscale-small/releases/download/v1.100.0/tsmanager
 
 ### jsDelivr CDN
 
-jsDelivr cannot directly accelerate GitHub Release assets. Therefore, after publishing a release, the workflow mirrors the files to the `cdn` branch for jsDelivr.
-
-Latest-version downloads:
+After each release, the workflow mirrors files to the `cdn` branch for jsDelivr:
 
 ```text
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tsmanager.sh
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/latest/tailscale-small_latest_linux-arm64.tar.gz
-```
-
-Versioned downloads:
-
-```text
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.100.0/tsmanager.sh
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.100.0/tailscale-small_v1.100.0_linux-arm64.tar.gz
 ```
 
-The manager script can also be downloaded directly from the `main` branch source:
+Latest script source from `main`:
 
 ```text
 https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@main/tsmanager.sh
 ```
 
-Note: jsDelivr caches files. Versioned URLs are the most stable. `latest` is convenient for automatic updates but may have short CDN propagation delays.
+jsDelivr caches files: versioned URLs are most stable; `latest` may lag briefly. On-device download order: **user `PACKAGE_URL` → CDN → GitHub Releases**.
+
+Release artifacts are only per-arch `.tar.gz` plus `tsmanager.sh` (no `.sha256` / `SHA256SUMS` / note txt).
+
+## Runtime layout
+
+Designed for small `/data` and larger `/tmp`:
+
+```text
+persistent (small)                 volatile (large)
+/data/tailscale/                   /tmp/tailscale/
+  tsmanager.sh   ← self-install    tailscale
+  .env           ← explicit cfg    tailscaled -> tailscale
+  state/         ← identity        pid / log / downloads / lock / breaker
+
+socket (fixed)
+  /var/run/tailscale/tailscaled.sock
+```
+
+| Path | Default | Role |
+| --- | --- | --- |
+| `DATA_DIR` | `/data/tailscale` | script, `.env`, `state/` |
+| `TMP_DIR` | `/tmp/tailscale` | binary, downloads, logs, lock, breaker |
+| `SOCKET` | `/var/run/tailscale/tailscaled.sock` | CLI ↔ daemon |
+| managed script | `$DATA_DIR/tsmanager.sh` | installed by `install` / `enable` / `cron` |
+
+`/tmp` wipe on reboot is expected: `ensure` / `start` reinstall when the binary is missing.
+
+## Configuration model
+
+Priority:
+
+```text
+process environment (values set before sourcing .env are restored)
+        >  persisted .env
+        >  built-in defaults
+```
+
+### VERSION and PACKAGE_URL
+
+| Case | Behavior |
+| --- | --- |
+| empty `PACKAGE_URL` | derive URL from `VERSION + TARGET` (CDN primary, GitHub fallback) |
+| non-empty `PACKAGE_URL` | **wins** over `VERSION`; `VERSION` is recorded only |
+| interactive “no custom URL” | force `PACKAGE_URL=''` |
+| save `.env` | persist `PACKAGE_URL` **only when non-empty** |
+
+### Version resolution
+
+| `VERSION` | Behavior |
+| --- | --- |
+| `latest` | CDN `latest` path; GitHub fallback resolves the newest tag |
+| pinned e.g. `v1.100.0` | trust local config; no silent rewrite if the tag list is missing |
+| `VERSION_FALLBACK=1` | allow fall back to `latest` only when the online list is available and lacks the pin |
+
+### `.env`
+
+- `ENV_SCHEMA_VERSION` is currently `2`
+- Startup normalization handles legacy `TS_PACKAGE_URL`, duplicated `latest/latest` URLs, and VERSION vs latest-URL conflicts
+- `.env` is root-equivalent; suspicious command substitution is warned
+- `AUTH_KEY` is not persisted by default; `status` shows only `auth_key=set/unset`
+
+## Download and install pipeline
+
+```text
+URL candidates: PACKAGE_URL → CDN → GitHub Release
+        │
+        ▼
+download (curl / wget / busybox wget; fail over)
+        │
+        ▼
+extract → validate (executable, version/help, reject HTML error pages / tiny files)
+        │
+        ▼
+atomic replace BIN (keep tailscale.old) + ln -sf tailscale DAEMON
+if daemon is running and binary changed → restart
+```
+
+Disk space is checked before install; temp package/unpack paths are cleaned on EXIT. Startup failure may roll back to `.old`.
+
+## Process safety
+
+| Mechanism | Role |
+| --- | --- |
+| `LOCKDIR` | serialize install/ensure/cron; reclaim stale locks |
+| `find_pid` | prefer pidfile + **this project's path**; avoid killing system tailscaled |
+| ready wait | wait for pid + socket (`START_WAIT_SECONDS`) |
+| circuit breaker | trip after repeated start failures; clear with `clear-error` |
+| log rotate | trim when over `LOG_MAX_KB` |
+| `reset-state` | reject unsafe STATEDIR; outside `DATA_DIR` needs confirm or `FORCE_RESET` |
+
+## Autostart backends
+
+`BOOT_BACKEND=auto`: `procd → systemd → OpenRC → cron → manual`
+
+| backend | Artifact | Keepalive |
+| --- | --- | --- |
+| procd | `/etc/init.d/tailscale-small` | procd respawn |
+| systemd | `tailscale-small.service` | `Restart=on-failure` |
+| OpenRC | `/etc/init.d/tailscale-small` | supervise-daemon |
+| cron | `BEGIN/END tsmanager.sh` block | `ensure` every 5 minutes |
+| manual | none | none |
+
+- service/cron always invoke `$DATA_DIR/tsmanager.sh`
+- native enable failure: remove half-written service, then write cron (no dual keepalive)
+- backend switch / `disable` / `uninstall` remove residuals
+
+`ensure`: read config → install if binary missing (`UPDATE_ON_ENSURE=1` forces reinstall) → start if not running → restart if binary just updated.
 
 ## Router installation
 
-This layout is intended for systems where `/data` is tiny and `/tmp` has more room.
+Intended for systems with tiny `/data` and roomier `/tmp`.
 
-1. Fetch the manager script:
+1. Fetch the manager:
 
 ```sh
 mkdir -p /data/tailscale
@@ -113,7 +250,7 @@ wget -O tsmanager.sh https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/la
 chmod +x tsmanager.sh
 ```
 
-If the device cannot access jsDelivr, use GitHub Releases or a LAN HTTP URL instead.
+If jsDelivr is unreachable, use GitHub Releases or a LAN HTTP URL.
 
 2. First install:
 
@@ -121,207 +258,122 @@ If the device cannot access jsDelivr, use GitHub Releases or a LAN HTTP URL inst
 /data/tailscale/tsmanager.sh install
 ```
 
-Bare `install` defaults to `install enable` and performs four actions:
+Bare `install` ≡ `install enable`:
 
-- Prompts for settings and writes `/data/tailscale/.env` (only user-specified values are saved; .env stays minimal)
-- Downloads the `.tar.gz` archive and installs the binary into `/tmp/tailscale`
-- Enables autostart/keepalive through the best native backend (procd/systemd/OpenRC), falling back to cron when needed
-- Automatically starts `tailscaled`
-
-You can choose the install semantics explicitly:
+- interactive `.env` (explicit user values only)
+- download/install binary into `/tmp/tailscale`
+- enable autostart/keepalive (native preferred, else cron)
+- start `tailscaled`
+- self-install script to `$DATA_DIR/tsmanager.sh`
 
 ```sh
-/data/tailscale/tsmanager.sh install only      # install files only; no start, no autostart/keepalive
-/data/tailscale/tsmanager.sh install start     # install and start; no autostart/keepalive
-/data/tailscale/tsmanager.sh install enable    # install + autostart/keepalive + start (default)
-/data/tailscale/tsmanager.sh install keepalive # same as install enable
+/data/tailscale/tsmanager.sh install only      # files only
+/data/tailscale/tsmanager.sh install start     # install + start, no autostart
+/data/tailscale/tsmanager.sh install enable    # install + autostart + start (default)
+/data/tailscale/tsmanager.sh install keepalive # same as enable
 ```
 
-The script asks just 5 questions:
+Interactive prompts (5): `statedir`, `config`, `VERSION`, custom URL yes/no, custom `PACKAGE_URL` (empty re-prompts or cancels).
 
-- `statedir`, default `/data/tailscale/state`
-- `config`, optional and can be empty
-- version; default `latest` (follow the latest release), or pin to e.g. `v1.100.0`
-- whether to use a custom download URL, default no
-- only if you answer yes, the custom `PACKAGE_URL`
-
-The default path is: choose `VERSION`, then the script derives the download URL from `VERSION + CPU architecture`, for example arm64 + `v1.100.0`:
-
-```text
-https://cdn.jsdelivr.net/gh/xinghaix/tailscale-small@cdn/v1.100.0/tailscale-small_v1.100.0_linux-arm64.tar.gz
-```
-
-Only choose a custom URL when you have a private mirror, LAN HTTP server, or handwritten tar.gz URL. If `PACKAGE_URL` is non-empty, it takes precedence over `VERSION`; in that mode `VERSION` is recorded but not used for downloading.
-
-3. Start the daemon:
+3. Start / login:
 
 ```sh
 /data/tailscale/tsmanager.sh start
-```
-
-4. Log in:
-
-```sh
-/tmp/tailscale/tailscale --socket=/var/run/tailscale/tailscaled.sock up
-```
-
-Or use an auth key:
-
-```sh
+/data/tailscale/tsmanager.sh up
+# or
 /tmp/tailscale/tailscale --socket=/var/run/tailscale/tailscaled.sock up --auth-key=tskey-... --hostname=router
 ```
 
-## Custom download source
-
-Only one `.tar.gz` URL is needed. You can write it to `.env` or pass it as an environment variable.
+Custom source:
 
 ```sh
 PACKAGE_URL='https://example.com/tailscale-small_v1.100.0_linux-arm64.tar.gz' \
 /data/tailscale/tsmanager.sh install
 ```
 
-## Manager commands
+## Commands
 
-All commands are designed to be idempotent and safe to run repeatedly.
+All commands are idempotent.
 
 ```text
-install    defaults to install enable: first-run config + install + autostart/keepalive + start
-install only    configure + download/install only; no start, no autostart/keepalive
-install start   configure + download/install + start; no autostart/keepalive
-install enable  configure + download/install + enable autostart/keepalive + start
-install keepalive same as install enable
-update     download/install again, refresh cron, then start tailscaled
-start      start tailscaled; download/install first if runtime files are missing
-stop       stop tailscaled; succeeds even if it is not running
-restart    restart tailscaled
-clear-error clear the startup circuit-breaker marker so auto-start can retry
-service-install install the recommended service backend for the current system
-service-remove  remove the current backend service
-enable     enable autostart/keepalive; fall back to cron if native init is unavailable
-disable    disable autostart/keepalive
-boot-status show autostart backend status
-doctor     diagnose the device environment; doctor tailscale checks Tailscale runtime state
-up         wrap tailscale up with the configured socket
-login-status show Tailscale login/connection status
-reset-state stop tailscaled, delete state, then start again
-uninstall  full uninstall: stop process, remove cron, delete runtime files; interactively choose whether to delete config and script
-status     show config, files, process, storage, cron, lock/error state, and download URLs
-ensure     cron action: read .env/defaults, install if needed, start if needed; idempotent
-cron       automatically write or update the cron job without duplicating it
-help       show help
+install / install only|start|enable|keepalive
+update          reinstall, refresh autostart/keepalive, then start
+start|stop|restart
+clear-error     clear startup breaker
+service-install|service-remove
+enable|disable  autostart on/off (disable clears all backend residuals)
+boot-status
+doctor [tailscale]
+up|login-status|reset-state
+config          reconfigure wizard / batch .env (alias: reconfigure)
+uninstall
+status|ensure|cron|selftest|help
 ```
 
-## Autostart and keepalive backends
+Global options: `-y` / `--yes` non-interactive; `-n` / `--dry-run` print planned actions only.
 
-`BOOT_BACKEND=auto` selects the best available backend for the current system:
+```text
+config plane    install plane       runtime plane       autostart plane     diagnose plane
+config          install only        start/stop/restart  enable/disable      status
+                install start       ensure              service-install     doctor
+                install enable*     update              service-remove      doctor tailscale
+                update              up / login-status    boot-status         selftest
+                uninstall           reset-state          cron                clear-error
+```
 
-- OpenWrt/procd: generates `/etc/init.d/tailscale-small` with procd respawn.
-- systemd: generates `tailscale-small.service` with `Restart=on-failure`.
-- OpenRC: generates `/etc/init.d/tailscale-small` with supervise-daemon respawn.
-- Other BusyBox/router environments: falls back to cron ensure.
-- `manual`: install only; do not configure autostart.
+\* Bare `install` ≡ `install enable`.
 
-Common commands:
+State machine:
+
+```text
+[not installed] --install only--> [files present]
+[not installed] --install start--> [running]
+[not installed] --install enable--> [running + autostart]
+[files present] --start/ensure--> [running]
+[running] --stop--> [files present]
+[running] --binary updated--> [running] (auto restart)
+[running] --start failures--> [tripped] --clear-error--> [startable]
+any --uninstall--> [not installed] (optional keep .env/state/script)
+```
+
+Common:
 
 ```sh
 /data/tailscale/tsmanager.sh doctor
-/data/tailscale/tsmanager.sh service-install
 /data/tailscale/tsmanager.sh enable
 /data/tailscale/tsmanager.sh boot-status
-```
-
-## Tailscale login and runtime status
-
-The script can wrap `tailscale up` and automatically use the configured socket:
-
-```sh
 TS_HOSTNAME=router ADVERTISE_ROUTES=192.168.1.0/24 \
-/data/tailscale/tsmanager.sh up --accept-routes=true
+  /data/tailscale/tsmanager.sh up --accept-routes=true
 ```
 
-Runtime diagnostics:
-
-```sh
-/data/tailscale/tsmanager.sh doctor tailscale
-/data/tailscale/tsmanager.sh login-status
-```
-
-To switch account or reset identity:
-
-```sh
-/data/tailscale/tsmanager.sh reset-state
-```
-
-## Uninstall
-
-Run:
+### Uninstall
 
 ```sh
 /data/tailscale/tsmanager.sh uninstall
-```
-
-Uninstall performs structured cleanup:
-
-- Stops `tailscaled`
-- Removes the cron block written by `tsmanager.sh`
-- Deletes runtime files under `/tmp/tailscale`, including binaries, pid/log files, temporary downloads, and unpack directories
-- Keeps `/data/tailscale/.env`, the state directory, and the script itself by default
-- Interactively asks whether to delete config/state
-- Interactively asks whether to delete the script itself
-
-For non-interactive environments, force optional deletion with environment variables:
-
-```sh
+# force optional deletes:
 DELETE_CONFIG=1 DELETE_SCRIPT=1 /data/tailscale/tsmanager.sh uninstall
 ```
 
-## Manager storage layout
+- stop process; remove all backends (procd/systemd/OpenRC/cron)
+- clear `/tmp/tailscale` runtime files
+- keep `.env`, state, and script by default; prompt for optional deletes
 
-`/data/tailscale` stores only small persistent files:
-
-- `tsmanager.sh`
-- `.env`
-- `state/`
-
-`/tmp/tailscale` stores large and runtime files:
-
-- `tailscale`
-- `tailscaled -> tailscale`
-- downloaded packages and unpack directories
-- pid/log files
-
-The socket is fixed at:
-
-```text
-/var/run/tailscale/tailscaled.sock
-```
-
-## Self-healing cron
-
-`install enable` installs the recommended autostart/keepalive backend automatically; on generic BusyBox/router systems it falls back to cron. You can also refresh cron manually:
+### Self-healing cron
 
 ```sh
 /data/tailscale/tsmanager.sh cron
 ```
 
-Cron runs `ensure` every 5 minutes. It performs the full install + start self-healing flow:
+Every 5 minutes `ensure` reinstalls missing files, starts a missing daemon, and rotates oversized logs. Default does not re-download; set `UPDATE_ON_ENSURE=1` to force.
 
-- Reads download source, target, state directory, and other settings from `.env` plus defaults
-- If the binary in `/tmp` is missing, downloads the `.tar.gz` archive and installs it
-- If the `tailscaled` process is missing, starts it
-- If already installed and running, skips work and remains idempotent
-
-That means default `install` / `install enable` and `ensure` carry `start` semantics: if files are missing they reinstall, and if the daemon is not running they bring `tailscaled` up. Use `install only` for files only, or `install start` to install and start without autostart.
-
-By default `UPDATE_ON_ENSURE=0`, so cron does not download every 5 minutes. To force download/install every cron run, set this in `.env`:
+## Tests and build
 
 ```sh
-UPDATE_ON_ENSURE=1
+sh tests/run.sh
+DATA_DIR=/tmp/ts-data TMP_DIR=/tmp/ts-tmp TARGET=linux-arm64 ./tsmanager.sh selftest
 ```
 
-## Local build
-
-The build script lives at `.github/workflows/build-package.sh` because it is primarily used by GitHub Actions; it can also be run locally:
+Local package:
 
 ```sh
 .github/workflows/build-package.sh \
@@ -331,11 +383,7 @@ The build script lives at `.github/workflows/build-package.sh` because it is pri
   --out dist
 ```
 
-## Automated build and release
-
-GitHub Actions checks the latest stable tag from official `tailscale/tailscale` at 03:17 UTC on the first day of every month. If the corresponding `vX.Y.Z` release does not exist, it builds 10 architecture archives and publishes a release. Release tags follow official Tailscale tags directly and do not add a `-small` suffix.
-
-Manual trigger:
+Manual release:
 
 ```sh
 gh workflow run "Build minimal Tailscale packages" \
@@ -344,17 +392,16 @@ gh workflow run "Build minimal Tailscale packages" \
   -f force=true
 ```
 
-On release, the workflow:
+Existing same-tag releases are skipped unless `force=true`.
 
-1. Builds `.tar.gz` archives for all 10 targets
-2. Uploads the `.tar.gz` files and `tsmanager.sh` to GitHub Releases
-3. Mirrors the same files to the version directory on the `cdn` branch
-4. Generates `latest/` for jsDelivr usage
+## Maintenance notes
 
-Releases and CDN no longer publish `tailscale-small_*.txt`, `.sha256`, or `SHA256SUMS` files; router-side installs only need the matching `.tar.gz` archive. The release workflow purges jsDelivr after updating the `cdn` branch and verifies key files under both `latest` and the versioned directory via HTTP.
+- Runtime changes: update `tsmanager.sh`, then `tests/run.sh`, then both READMEs
+- Release-shape changes: sync `.github/workflows` and the Architecture / Download / Build sections above
+- Docs describe current facts only; no temporary roadmaps
 
 ## License
 
 Repository scripts and workflows are licensed under the GNU General Public License v3.0 (GPL-3.0).
 
-Tailscale itself comes from the official `tailscale/tailscale` repository and follows its upstream licenses. Generated binaries are built from official source code. This project does not own the Tailscale trademark or upstream source copyright.
+Tailscale itself comes from official `tailscale/tailscale` and follows its upstream licenses. Generated binaries are built from official source. This project does not own the Tailscale trademark or upstream copyright.
